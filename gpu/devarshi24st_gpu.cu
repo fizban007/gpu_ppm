@@ -434,15 +434,11 @@ calc_one_star(
     Lens const& lens,
     NSX const& nsx,
     IsmInst const& ism_inst,
+    int N_side,
     int N_fine_phase,
     int N_points_per_phase_bin,
     std::string const& setting
 ) {
-  std::ifstream ifs("output/" + star_data.name + "_" + setting + "_Nside.txt");
-  int N_side = 100;
-  ifs >> N_side;
-  ifs.close();
-
   float* flux_gpu;
   int total_flux_gpu_size = N_output_phase_bins * ism_inst.N_E_obs;
   cudaMalloc(&flux_gpu, total_flux_gpu_size * sizeof(float));
@@ -522,16 +518,16 @@ main(int argc, char* argv[]) {
   int N_points_per_phase_bin = 2;
   int N_fine_phase = 32 * 6;
 
-  calc_one_star(warmup, lens, nsx, ism_inst, N_fine_phase, N_points_per_phase_bin, "std");
-  calc_one_star(ring_eq, lens, nsx, ism_inst, N_fine_phase, N_points_per_phase_bin, "std");
-  calc_one_star(ring_polar, lens, nsx, ism_inst, N_fine_phase, N_points_per_phase_bin, "std");
-  calc_one_star(crescent_eq, lens, nsx, ism_inst, N_fine_phase, N_points_per_phase_bin, "std");
-  calc_one_star(crescent_polar, lens, nsx, ism_inst, N_fine_phase, N_points_per_phase_bin, "std");
+  calc_one_star(warmup, lens, nsx, ism_inst, 173, N_fine_phase, N_points_per_phase_bin, "std");
+  calc_one_star(ring_eq, lens, nsx, ism_inst, 173, N_fine_phase, N_points_per_phase_bin, "std");
+  calc_one_star(ring_polar, lens, nsx, ism_inst, 1708, N_fine_phase, N_points_per_phase_bin, "std");
+  calc_one_star(crescent_eq, lens, nsx, ism_inst, 128, N_fine_phase, N_points_per_phase_bin, "std");
+  calc_one_star(crescent_polar, lens, nsx, ism_inst, 189, N_fine_phase, N_points_per_phase_bin, "std");
 
-  calc_one_star(ring_eq, lens, nsx, ism_inst, N_fine_phase, N_points_per_phase_bin, "high");
-  calc_one_star(ring_polar, lens, nsx, ism_inst, N_fine_phase, N_points_per_phase_bin, "high");
-  calc_one_star(crescent_eq, lens, nsx, ism_inst, N_fine_phase, N_points_per_phase_bin, "high");
-  calc_one_star(crescent_polar, lens, nsx, ism_inst, N_fine_phase, N_points_per_phase_bin, "high");
+  calc_one_star(ring_eq, lens, nsx, ism_inst, 345, N_fine_phase, N_points_per_phase_bin, "high");
+  calc_one_star(ring_polar, lens, nsx, ism_inst, 3413, N_fine_phase, N_points_per_phase_bin, "high");
+  calc_one_star(crescent_eq, lens, nsx, ism_inst, 247, N_fine_phase, N_points_per_phase_bin, "high");
+  calc_one_star(crescent_polar, lens, nsx, ism_inst, 382, N_fine_phase, N_points_per_phase_bin, "high");
 
   nsx.free_gpu_memory();
   lens.free_gpu_memory();

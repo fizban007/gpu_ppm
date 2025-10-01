@@ -41,18 +41,9 @@ calc_one_star(
       .phi2 = s.phi2,
       .angrad2 = s.angrad2
   };
-  int x0, y0;
-  int x1, y1;
-  int xsav, ysav;
 
-  xsav = N_side;
-  ysav = GenerateHealpixGrid(xsav, disk, grid);
-
-  std::string ofname = "output/" + s.name + "_" + setting + "_Nside.txt";
-  std::ofstream ofs(ofname);
-  ofs << xsav << ' ' << ysav << '\n';
-  ofs.close();
-  printf(">>> (%d, %d) saved to %s\n", xsav, ysav, ofname.c_str());
+  int N_active = GenerateHealpixGrid(N_side, disk, grid);
+  printf(">>> N_side: %d, N_active: %d\n", N_side, N_active);
 
   constexpr double M = 1.4;             // M_sun;
   constexpr double Re = 12;             // km

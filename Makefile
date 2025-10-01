@@ -16,8 +16,8 @@ CXXFLAGS := -std=c++20 -O3 -march=native -ffast-math
 
 
 ifneq (command line,$(origin CXX))
-#   CXX := clang++
-  CXX := g++
+  CXX := clang++
+#   CXX := g++
 endif
 
 
