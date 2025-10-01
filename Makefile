@@ -5,11 +5,8 @@ gpu_src_files := $(wildcard gpu/*)
 GPUFLAGS := -arch=sm_89 -std=c++20 -O3 -Xcompiler "-std=c++20,-O3,-march=native"
 GPUFLAGS += -lcublas
 GPUFLAGS += --use_fast_math
-# GPUFLAGS += -dlto
 # GPUFLAGS += --resource-usage
-# GPUFLAGS += --maxrregcount=40
 GPUFLAGS += --maxrregcount=64
-# GPUFLAGS += -lineinfo
 # GPUFLAGS += -DNDEBUG
 
 
