@@ -1,3 +1,6 @@
 ext/
 tables/
+output/
+build/
+.vscode/
 *.pdf
