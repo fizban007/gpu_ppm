@@ -16,7 +16,6 @@
 
 #include <cublas_v2.h>
 #include <cub/block/block_reduce.cuh>
-#include <cuda/functional>
 
 constexpr int BLOCK_SIZE = 1024;
 
@@ -284,9 +283,9 @@ KernelFunc(StarParams s, Lens lens, NSX nsx, IsmInst ism_inst, float* flux_gpu) 
   __shared__ int s_invisible_i_phase_min;
   __shared__ int s_invisible_i_phase_max;
 
-  invisible_i_phase_min = block_reduce.Reduce(invisible_i_phase_min, cuda::minimum<int>{});
+  invisible_i_phase_min = block_reduce.Reduce(invisible_i_phase_min, int_min{});
   __syncthreads();
-  invisible_i_phase_max = block_reduce.Reduce(invisible_i_phase_max, cuda::maximum<int>{});
+  invisible_i_phase_max = block_reduce.Reduce(invisible_i_phase_max, int_max{});
   __syncthreads();
 
   if (threadIdx.x == 0) {

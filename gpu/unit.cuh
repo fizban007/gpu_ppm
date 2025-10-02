@@ -33,3 +33,17 @@ linspace(float beg, float end, int num_points) {
   }
   return vec;
 }
+
+struct int_min {
+  __device__ int
+  operator()(int a, int b) const noexcept {
+    return a < b ? a : b;
+  }
+};
+
+struct int_max {
+  __device__ int
+  operator()(int a, int b) const noexcept {
+    return a > b ? a : b;
+  }
+};
