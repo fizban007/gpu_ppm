@@ -53,7 +53,7 @@ Both CPU and GPU program executables depend on precomputed lensing and instrumen
 python3 c_lensing.py   # generates lensing tables in ./tables/lensing
 python3 c_ism_inst.py  # generates ism and instrument response tables in ./tables/ism_inst
 ```
-Ensure you have Python3 installed along with all required libraries (`numpy` and `scipy`). The generated tables will be stored in the appropriate subdirectories under `tables/`.
+Ensure you have Python3 installed along with all required libraries (`numpy` ,`scipy` and `matplotlib`). The generated tables will be stored in the appropriate subdirectories under `tables/`.
 
 ### Compile CPU binaries
 Select a C++20 capable compiler (default is Clang++) and ensure it's available in your PATH.
@@ -126,7 +126,7 @@ It will produces per‑scenario flux vs phase files:
 
 Run data visualization scripts to generate comparison plots:
 ```bash
-python3 plot_os1.py
+python3 p_os1.py
 ```
 
 
@@ -137,7 +137,7 @@ Use the following commands to run the atmosphere interpolation test:
 ```
 Run data visualization scripts to generate comparison plots:
 ```bash
-python3 plot_t_interp.py
+python3 p_interp.py
 ```
 
 
