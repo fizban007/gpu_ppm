@@ -16,6 +16,7 @@
 
 #include <cublas_v2.h>
 #include <cub/block/block_reduce.cuh>
+#include <cuda/functional>
 
 constexpr int BLOCK_SIZE = 1024;
 

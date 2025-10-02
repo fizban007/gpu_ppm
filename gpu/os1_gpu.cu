@@ -14,6 +14,7 @@
 #include "unit.cuh"
 
 #include <cub/block/block_reduce.cuh>
+#include <cuda/functional>
 
 constexpr int BLOCK_DIM_X = 256;
 constexpr int N_side = 256;
