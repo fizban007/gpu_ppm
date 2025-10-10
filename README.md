@@ -124,7 +124,7 @@ This repository redistributes, **for reproducibility and convenience**, several 
 * **Atmosphere lookup tables (NSX)**
 
   * `ext/model_data/nsx_H_v200804.out`
-    Source: Choudhury et al. 2024 replication package (Zenodo DOI: 10.5281/zenodo.13133748).
+    Source: Choudhury et al. 2024 replication package (Zenodo DOI: [10.5281/zenodo.13133748](https://zenodo.org/records/13133749)).
   * `ext/model_data/nsx_H_v171019.out`, `ext/model_data/nsx_H_v200804.out`, `ext/model_data/README_v171019.txt`, `ext/model_data/README_v200804.txt`
     Source: *Auxiliary files for X-PSI tutorials*, Zenodo v1.0.1 (DOI: 10.5281/zenodo.7094144).
     Methodology: Tables generated following **Ho & Lai (2001, 2003)**.
@@ -132,13 +132,13 @@ This repository redistributes, **for reproducibility and convenience**, several 
 * **Pulse-profile benchmarks (Section 3 of our paper, [arXiv:2510.07764])**
 
   * Directory (after unpacking): `ext/apjlab5968/`
-    Source: Supplementary materials for **Bogdanov et al. 2019** (*ApJL* 887, L25).
+    Source: Supplementary materials for **Bogdanov et al. 2019** (*ApJL* 887, L26)(https://iopscience.iop.org/article/10.3847/2041-8213/ab5968).
     Notes: Contains the pulse-profile data and benchmark materials necessary to reproduce the analyses in Bogdanov et al. (see `ext/apjlab5968/ReadMe` for details).
 
 * **Production-grade pulse-profile comparisons (Section 5 of our paper)**
 
   * Directory: `ext/Pulse_profiles_by_diff_codes/`
-    Source: Choudhury et al. 2024 replication package (Zenodo DOI: 10.5281/zenodo.13133748).
+    Source: Choudhury et al. 2024 replication package (Zenodo DOI: [10.5281/zenodo.13133748](https://zenodo.org/records/13133749)).
     Original archive & subpath: `Pulse_profile_comparison.tar.gz` → `Pulse_profile_comparison/Pulse_profiles_by_diff_codes/`.
 
 * **NICER instrument response (RMF/ARF) files**
@@ -147,34 +147,33 @@ This repository redistributes, **for reproducibility and convenience**, several 
     `ext/model_data/nicer-consim135p-teamonly-array50_arf.txt`
     `ext/model_data/nicer-rmf6s-teamonly-array50_full_energy_bounds.txt`
     `ext/model_data/nicer-rmf6s-teamonly-array50_full_matrix.txt`
-  * Source: `XPSI_Pulse_profile_reproduction.tar.gz/model_data/` within Choudhury et al. 2024 replication package (Zenodo DOI: 10.5281/zenodo.13133748).
+  * Source: `XPSI_Pulse_profile_reproduction.tar.gz/model_data/` within Choudhury et al. 2024 replication package (Zenodo DOI: [10.5281/zenodo.13133748](https://zenodo.org/records/13133749)).
 
 * **Interstellar medium and conversion utilities**
 
   * `ext/model_data/interstellar_phot_frac.txt` (ISM absorption lookup)
   * `ext/model_data/j0437_3c50_cl_evt_merged_phase_converted_to_counts.txt` (J0437 conversion data)
-  * Source: `XPSI_Pulse_profile_reproduction.tar.gz/model_data/` within Choudhury et al. 2024 replication package (Zenodo DOI: 10.5281/zenodo.13133748).
+  * Source: `XPSI_Pulse_profile_reproduction.tar.gz/model_data/` within Choudhury et al. 2024 replication package (Zenodo DOI: [10.5281/zenodo.13133748](https://zenodo.org/records/13133749)).
 
 ### Licensing and attribution
 
 * The third-party materials above are released by their authors under **Creative Commons** licenses (see each Zenodo/journal page for the specific terms).
 * If you use these files, please **cite the original works** (examples below) and **link to the original sources** (DOIs provided above).
-* If any attribution is incomplete or incorrect, please open an issue and we will correct it promptly.
+* If any attribution is incom ApJ 975 202plete or incorrect, please open an issue and we will correct it promptly.
 
 ### Suggested citations
 
-* Bogdanov, S., *et al.* (2019), *ApJL* 887, L25 — “Constraining the Neutron Star Mass–Radius Relation and Dense Matter Equation of State With NICER. II. Emission From Hot Spots on a Rapidly Rotating Neutron Star.”
-* Choudhury, D., *et al.* (2024), *ApJ* — “Waveform comparison and reproduction package” (Zenodo DOI: 10.5281/zenodo.13133748).
+* Bogdanov, S., *et al.* (2019), *ApJL* 887, L26 — “Constraining the Neutron Star Mass–Radius Relation and Dense Matter Equation of State With NICER. II. Emission From Hot Spots on a Rapidly Rotating Neutron Star.” (https://iopscience.iop.org/article/10.3847/2041-8213/ab5968)
+* Choudhury, D., *et al.* (2024), *Zenodo* — “Reproduction package for: 'Exploring Waveform Variations among Neutron Star Ray-tracing Codes for Complex Emission Geometries'” Zenodo DOI: [10.5281/zenodo.13133748](https://zenodo.org/records/13133749).
+* Choudhury, D., *et al.* (2024), *ApJ*975, 202 (https://iopscience.iop.org/article/10.3847/1538-4357/ad7255)
 * Ho, W. C. G. & Lai, D. (2001), *MNRAS* 327, 1081; (2003), *MNRAS* 338, 233 — NSX atmosphere methodology.
-* X-PSI tutorial auxiliary files, Zenodo v1.0.1 (DOI: 10.5281/zenodo.7094144).
+* X-PSI tutorial auxiliary files, Zenodo v1.0.1 DOI: [10.5281/zenodo.7094144](https://zenodo.org/records/7113931).
 
 ### Repackaging note
 
 We redistribute the above files **verbatim** (no scientific modifications), with only minimal repackaging (archive structure and path names) to enable turnkey runs of our examples and benchmarks.
 
 ---
-
-If you’d like, I can also add a short **“How to obtain data fresh from source”** block (with `wget` commands using the DOIs) so users can re-download directly from the original records.
 
 ## Running the Programs
 
