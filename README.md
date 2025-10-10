@@ -126,7 +126,7 @@ This repository redistributes, **for reproducibility and convenience**, several 
   * `ext/model_data/nsx_H_v200804.out`
     Source: Choudhury et al. 2024 replication package (Zenodo DOI: [10.5281/zenodo.13133748](https://zenodo.org/records/13133749)).
   * `ext/model_data/nsx_H_v171019.out`, `ext/model_data/nsx_H_v200804.out`, `ext/model_data/README_v171019.txt`, `ext/model_data/README_v200804.txt`
-    Source: *Auxiliary files for X-PSI tutorials*, Zenodo v1.0.1 (DOI: 10.5281/zenodo.7094144).
+    Source: *Auxiliary files for X-PSI tutorials*, Zenodo v1.0.1 (DOI: [10.5281/zenodo.7094144](https://zenodo.org/records/7113931)).
     Methodology: Tables generated following **Ho & Lai (2001, 2003)**.
 
 * **Pulse-profile benchmarks (Section 3 of our paper, [arXiv:2510.07764])**
