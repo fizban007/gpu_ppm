@@ -3,7 +3,7 @@ gpu_ppm: GPU-Accelerated Pulsar / Neutron Star Pulse Profile Modeling
 
 High‑performance C++20 / CUDA code for generating phase‑resolved pulse profiles and energy–phase counts for rotating neutron star surface emission with relativistic light bending, time delays, Doppler / aberration effects, oblate star shape, atmosphere beaming (NSX tables), and instrument response folding. Includes CPU reference implementations for validation and comparison.
 
-This repository is intended to reproduce the results of our work (arXiv:xxxx.xxxx). Please consider citing the paper if you use this code in academic work.
+This repository is intended to reproduce the results of our work ([arXiv:2510.07764](https://arxiv.org/abs/2510.07764)). Please consider citing the paper if you use this code in academic work.
 
 ## Key Features
 
