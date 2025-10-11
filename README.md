@@ -159,13 +159,13 @@ This repository redistributes, **for reproducibility and convenience**, several 
 
 * The third-party materials above are released by their authors under **Creative Commons** licenses (see each Zenodo/journal page for the specific terms).
 * If you use these files, please **cite the original works** (examples below) and **link to the original sources** (DOIs provided above).
-* If any attribution is incom ApJ 975 202plete or incorrect, please open an issue and we will correct it promptly.
+* If any attribution is incomplete or incorrect, please email us: zhoutz22@mails.tsinghua.edu.cn and chun.h@wustl.edu and we will correct it promptly.
 
 ### Suggested citations
 
 * Bogdanov, S., *et al.* (2019), *ApJL* 887, L26 — “Constraining the Neutron Star Mass–Radius Relation and Dense Matter Equation of State With NICER. II. Emission From Hot Spots on a Rapidly Rotating Neutron Star.” (https://iopscience.iop.org/article/10.3847/2041-8213/ab5968)
 * Choudhury, D., *et al.* (2024), *Zenodo* — “Reproduction package for: 'Exploring Waveform Variations among Neutron Star Ray-tracing Codes for Complex Emission Geometries'” Zenodo DOI: [10.5281/zenodo.13133748](https://zenodo.org/records/13133749).
-* Choudhury, D., *et al.* (2024), *ApJ* 975, 202 (https://iopscience.iop.org/article/10.3847/1538-4357/ad7255)
+* Choudhury, D., *et al.* (2024), *ApJ*, 975, 202 (https://iopscience.iop.org/article/10.3847/1538-4357/ad7255)
 * Ho, W. C. G. & Lai, D. (2001), *MNRAS* 327, 1081; (2003), *MNRAS* 338, 233 — NSX atmosphere methodology.
 * X-PSI tutorial auxiliary files, Zenodo v1.0.1 DOI: [10.5281/zenodo.7094144](https://zenodo.org/records/7113931).
 
