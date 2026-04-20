@@ -1,18 +1,14 @@
-// Sphere renderer — ray-casts a unit sphere at origin, highlights the hotspot.
+// Sphere renderer — ray-casts a unit sphere at origin, paints up to 4 spots
+// in painter's order (ADD blends hot, SUBTRACT blends cold).
 
-const PARAMS_SIZE = 112; // 7 vec4s = 7*16
-
-// Camera always orbits at fixed distance in the plane containing the spin axis (z).
-// The observer's inclination `inc` fixes the elevation; azimuth is user-controlled
-// (though we hold azimuth fixed and advance `observer_phase` instead — physically
-// equivalent, and keeps the camera relationship simple). Distance is now a
-// runtime param so the mouse wheel can zoom in/out.
-// CAM_DISTANCE_DEFAULT is the "zoom = 1.0×" reference, not the starting
-// distance — the app opens further out (see INITIAL_ZOOM in main.js).
-export const CAM_DISTANCE_DEFAULT = 3.2;
-export const CAM_DISTANCE_MIN = 1.35;  // just outside the unit sphere
+export const CAM_DISTANCE_DEFAULT = 3.2;   // zoom = 1.0× reference (not the startup distance)
+export const CAM_DISTANCE_MIN = 1.35;
 export const CAM_DISTANCE_MAX = 20.0;
 const FOV_Y = 35 * Math.PI / 180;
+
+const MAX_SPOTS = 4;
+// RenderParams layout: 6 x vec4 of chrome + 4 x vec4 of spots = 10 * 16 = 160 bytes.
+const PARAMS_SIZE = 160;
 
 function normalize3(v) {
   const n = Math.hypot(v[0], v[1], v[2]) || 1;
@@ -61,10 +57,8 @@ export async function createSphereRenderer(device, canvas) {
   const scratch = new ArrayBuffer(PARAMS_SIZE);
   const sf = new Float32Array(scratch);
 
-  function writeParams({ inc, spot_center_theta, spot_center_phi, angular_radius, observer_phase, aspect, distance }) {
-    // Camera in the star frame: sits in the (x,z) plane at elevation = inc
-    // (measured from the spin axis +z). sin(inc) = projection onto the orbital
-    // plane, cos(inc) = z component.
+  // spots: array of {theta, phi, rho, mode: "ADD"|"SUB"}
+  function writeParams({ inc, spots, observer_phase, aspect, distance }) {
     const d = distance ?? CAM_DISTANCE_DEFAULT;
     const si = Math.sin(inc);
     const ci = Math.cos(inc);
@@ -74,27 +68,42 @@ export async function createSphereRenderer(device, canvas) {
     const right = normalize3(cross3(fwd, worldUp));
     const up = cross3(right, fwd);
 
-    // cam_pos
-    sf[0] = camPos[0]; sf[1] = camPos[1]; sf[2] = camPos[2]; sf[3] = 0;
-    // cam_right
-    sf[4] = right[0]; sf[5] = right[1]; sf[6] = right[2]; sf[7] = 0;
-    // cam_up
-    sf[8] = up[0]; sf[9] = up[1]; sf[10] = up[2]; sf[11] = 0;
-    // cam_fwd
-    sf[12] = fwd[0]; sf[13] = fwd[1]; sf[14] = fwd[2]; sf[15] = 0;
-    // view: aspect, tan(fovy/2)
-    sf[16] = aspect; sf[17] = Math.tan(FOV_Y * 0.5); sf[18] = 0; sf[19] = 0;
-    // spot: theta, phi, cos(ang_rad), observer_phase
-    sf[20] = spot_center_theta;
-    sf[21] = spot_center_phi;
-    sf[22] = Math.cos(angular_radius);
-    sf[23] = observer_phase;
-    // light_dir: place light a bit off from the camera for visible shading
-    const ld = normalize3([fwd[0] + 0.3 * right[0] + 0.25 * up[0],
-                           fwd[1] + 0.3 * right[1] + 0.25 * up[1],
-                           fwd[2] + 0.3 * right[2] + 0.25 * up[2]]);
-    // Light points from scene toward light source, so shader uses `light_dir` directly.
-    sf[24] = -ld[0]; sf[25] = -ld[1]; sf[26] = -ld[2]; sf[27] = 0;
+    // cam_pos / right / up / fwd
+    sf[0]  = camPos[0]; sf[1]  = camPos[1]; sf[2]  = camPos[2]; sf[3] = 0;
+    sf[4]  = right[0];  sf[5]  = right[1];  sf[6]  = right[2];  sf[7] = 0;
+    sf[8]  = up[0];     sf[9]  = up[1];     sf[10] = up[2];     sf[11] = 0;
+    sf[12] = fwd[0];    sf[13] = fwd[1];    sf[14] = fwd[2];    sf[15] = 0;
+
+    // view: aspect, tan(fovy/2), observer_phase, spot_count
+    sf[16] = aspect;
+    sf[17] = Math.tan(FOV_Y * 0.5);
+    sf[18] = observer_phase;
+    sf[19] = Math.min(spots.length, MAX_SPOTS);
+
+    // light_dir: reverse of the lit-side direction (fragment uses -light_dir sign).
+    const ld = normalize3([
+      fwd[0] + 0.3 * right[0] + 0.25 * up[0],
+      fwd[1] + 0.3 * right[1] + 0.25 * up[1],
+      fwd[2] + 0.3 * right[2] + 0.25 * up[2],
+    ]);
+    sf[20] = -ld[0]; sf[21] = -ld[1]; sf[22] = -ld[2]; sf[23] = 0;
+
+    // spots: starting at offset 24 (= 96 bytes / 4), 4 vec4s.
+    for (let k = 0; k < MAX_SPOTS; k++) {
+      const base = 24 + k * 4;
+      if (k < spots.length) {
+        const s = spots[k];
+        sf[base + 0] = s.theta;
+        sf[base + 1] = s.phi;
+        sf[base + 2] = Math.cos(s.rho);
+        sf[base + 3] = s.mode === "ADD" ? 1.0 : (s.mode === "SUB" ? -1.0 : 0.0);
+      } else {
+        sf[base + 0] = 0;
+        sf[base + 1] = 0;
+        sf[base + 2] = 1.0;   // cos(0) — no effect since mode=0 short-circuits
+        sf[base + 3] = 0.0;
+      }
+    }
 
     device.queue.writeBuffer(paramsBuffer, 0, scratch);
   }

@@ -1,13 +1,13 @@
-// Interactive pulsar pulse-profile visualizer.
+// Interactive pulsar pulse-profile visualizer, multi-spot build.
 //
 // Interaction:
 //   - drag on sphere       → change observer phase
 //   - wheel on sphere      → zoom camera
 //   - drag curve-panel bar → reposition the panel
-//   - sliders / dropdowns  → mutate hotspot/observer params, recompute + redraw
-//   - preset picker        → load one of the OS1 cases into the sliders
+//   - sliders / dropdowns  → mutate shared or per-spot params, recompute + redraw
+//   - add/remove spot      → up to 4 spots; first SUBTRACT with no enclosing ADD is inert
 
-import { createPulseEngine, OS1_DEFAULTS } from "./compute.js";
+import { createPulseEngine, OS1_DEFAULTS, findParent } from "./compute.js";
 import {
   createSphereRenderer,
   CAM_DISTANCE_DEFAULT,
@@ -19,17 +19,15 @@ import { OS1_SCENARIOS, scenarioByName } from "./scenarios.js";
 
 const DEG = Math.PI / 180;
 const DEFAULT_PRESET = "os1f";
+const MAX_SPOTS = 4;
 
 const statusEl = document.getElementById("status");
 const paramPanel = document.getElementById("param-panel");
-
-// ------------ DOM helpers ------------
 
 function setStatus(msg, isError = false) {
   statusEl.textContent = msg;
   statusEl.classList.toggle("error", isError);
 }
-
 function sizeCanvasToDisplay(canvas) {
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   const rect = canvas.getBoundingClientRect();
@@ -40,15 +38,12 @@ function sizeCanvasToDisplay(canvas) {
     canvas.height = h;
   }
 }
-
 function el(tag, cls, text) {
   const e = document.createElement(tag);
   if (cls) e.className = cls;
   if (text !== undefined) e.textContent = text;
   return e;
 }
-
-// ------------ Lensing + validation plumbing ------------
 
 async function loadLensing(device) {
   const header = await fetch("public/lensing.json").then((r) => r.json());
@@ -66,73 +61,7 @@ async function loadLensing(device) {
   return { header, buffers };
 }
 
-async function loadReference(name) {
-  const res = await fetch(`public/reference/${name}_gpu.txt`);
-  if (!res.ok) return null;
-  const text = await res.text();
-  return new Float32Array(text.trim().split(/\s+/).map(Number));
-}
-
-async function runValidationSweep(engine) {
-  const lines = ["validation (max relative error to peak):"];
-  for (const sc of OS1_SCENARIOS) {
-    const t0 = performance.now();
-    const got = await engine.computePulseProfile(sc, OS1_DEFAULTS);
-    const ms = performance.now() - t0;
-    const ref = await loadReference(sc.name);
-    if (!ref) { lines.push(`  ${sc.name}  [no reference]`); continue; }
-    let peak = 0;
-    for (const v of ref) peak = Math.max(peak, Math.abs(v));
-    let maxRel = 0;
-    for (let i = 0; i < got.length; i++) {
-      const rel = peak > 0 ? Math.abs(got[i] - ref[i]) / peak : 0;
-      if (rel > maxRel) maxRel = rel;
-    }
-    const verdict = maxRel < 1e-2 ? "ok" : maxRel < 1e-1 ? "warn" : "FAIL";
-    lines.push(
-      `  ${sc.name}  rel=${(maxRel * 100).toFixed(4).padStart(8)}%  peak=${peak.toExponential(3)}  [${verdict}]  (${ms.toFixed(1)} ms)`,
-    );
-  }
-  return lines.join("\n");
-}
-
-// ------------ Params model ------------
-//
-// Sliders operate in display units (degrees, Hz). Only `paramsToScenario`
-// bridges to the compute-layer shape, which is in radians.
-
-function defaultParams() {
-  return {
-    nu: 600,
-    inc_deg: 80,
-    spot_theta_deg: 20,
-    angular_radius: 1.0,
-    beaming: 0,
-  };
-}
-
-function paramsToScenario(p) {
-  return {
-    name: "custom",
-    nu: p.nu,
-    spot_center_theta: p.spot_theta_deg * DEG,
-    inc: p.inc_deg * DEG,
-    angular_radius: p.angular_radius,
-    beaming: p.beaming,
-  };
-}
-
-function scenarioToParams(sc) {
-  return {
-    nu: sc.nu,
-    inc_deg: sc.inc / DEG,
-    spot_theta_deg: sc.spot_center_theta / DEG,
-    angular_radius: sc.angular_radius,
-    beaming: sc.beaming,
-  };
-}
-
-// ------------ Control widgets ------------
+// ------------ Controls ------------
 
 function makeSlider({ label, min, max, step, value, format }) {
   const row = el("div", "slider-row");
@@ -194,8 +123,6 @@ function makePresetPicker(initial) {
   };
 }
 
-// ------------ Drag-to-move panel ------------
-
 function makeDraggable(panel, handle) {
   let dragging = false, offX = 0, offY = 0;
   handle.addEventListener("pointerdown", (e) => {
@@ -225,6 +152,72 @@ function makeDraggable(panel, handle) {
   };
   handle.addEventListener("pointerup", end);
   handle.addEventListener("pointercancel", end);
+}
+
+// ------------ Spot UI ------------
+
+function buildSpotBlock(spot, index, ctx) {
+  const block = el("div", "spot-block");
+
+  const header = el("div", "spot-block-header");
+  const title = el("span");
+  title.innerHTML = `spot ${index + 1} &nbsp;<span class="tag">${spot.mode}</span>`;
+  const rm = el("button", "spot-remove", "×");
+  rm.title = "remove";
+  rm.addEventListener("click", () => ctx.remove(index));
+  header.append(title, rm);
+  block.appendChild(header);
+
+  const thetaSlider = makeSlider({
+    label: "θ", min: 0, max: 180, step: 1,
+    value: spot.theta_deg, format: (v) => `${v.toFixed(0)}°`,
+  });
+  const phiSlider = makeSlider({
+    label: "φ", min: 0, max: 360, step: 1,
+    value: spot.phi_deg, format: (v) => `${v.toFixed(0)}°`,
+  });
+  const rhoSlider = makeSlider({
+    label: "ρ", min: 0.01, max: 1.5, step: 0.01,
+    value: spot.rho, format: (v) => `${v.toFixed(2)} rad`,
+  });
+  const modeSelect = makeSelect({
+    label: "mode",
+    options: [{ value: 0, text: "ADD" }, { value: 1, text: "SUBTRACT" }],
+    value: spot.mode === "ADD" ? 0 : 1,
+  });
+  const kTSlider = makeSlider({
+    label: "kT", min: 0.05, max: 3.0, step: 0.01,
+    value: spot.kT, format: (v) => `${v.toFixed(2)} keV`,
+  });
+
+  block.append(thetaSlider.row, phiSlider.row, rhoSlider.row, modeSelect.row, kTSlider.row);
+
+  const applyMode = () => {
+    title.innerHTML = `spot ${index + 1} &nbsp;<span class="tag">${spot.mode}</span>`;
+    kTSlider.row.style.display = spot.mode === "ADD" ? "" : "none";
+  };
+  applyMode();
+
+  thetaSlider.onInput((v) => { spot.theta_deg = v; ctx.changed(); });
+  phiSlider.onInput((v)   => { spot.phi_deg = v;   ctx.changed(); });
+  rhoSlider.onInput((v)   => { spot.rho = v;       ctx.changed(); });
+  kTSlider.onInput((v)    => { spot.kT = v;        ctx.changed(); });
+  modeSelect.onChange((v) => {
+    spot.mode = v === 0 ? "ADD" : "SUB";
+    applyMode();
+    ctx.changed();   // changing mode also needs a full rebuild for the "inert" class
+    ctx.rebuild();
+  });
+
+  // Mark inert SUBTRACTs (no parent ADD contains their center).
+  if (spot.mode === "SUB") {
+    const adds = ctx.allSpots.filter((s) => s.mode === "ADD")
+      .map((s) => ({ theta: s.theta_deg * DEG, phi: s.phi_deg * DEG, rho: s.rho }));
+    const self = { theta: spot.theta_deg * DEG, phi: spot.phi_deg * DEG };
+    if (!findParent(adds, self)) block.classList.add("inert");
+  }
+
+  return block;
 }
 
 // ------------ Main ------------
@@ -260,23 +253,33 @@ async function main() {
 
   makeDraggable(curvePanel, curveHandle);
 
-  const url = new URL(window.location.href);
-  if (url.searchParams.has("validate")) {
-    setStatus("running validation sweep…");
-    setStatus(await runValidationSweep(engine));
-    return;
-  }
-
   // ----- state -----
-  const initialPreset = scenarioByName(DEFAULT_PRESET);
-  const params = scenarioToParams(initialPreset);
+  const observer = { nu: 600, inc_deg: 80, beaming: 0 };
+  const spots = [];
   let presetName = DEFAULT_PRESET;
   let observerPhase = 0;
-  const INITIAL_ZOOM = 0.35;  // default view is a touch zoomed out
+  const INITIAL_ZOOM = 0.35;
   let cameraDistance = CAM_DISTANCE_DEFAULT / INITIAL_ZOOM;
   let lastComputeMs = 0;
 
-  // ----- UI -----
+  function loadPreset(name) {
+    presetName = name;
+    const sc = scenarioByName(name);
+    observer.nu = sc.nu;
+    observer.inc_deg = sc.inc / DEG;
+    observer.beaming = sc.beaming;
+    spots.length = 0;
+    spots.push({
+      theta_deg: sc.spot_center_theta / DEG,
+      phi_deg: 0,
+      rho: sc.angular_radius,
+      mode: "ADD",
+      kT: OS1_DEFAULTS.kT,
+    });
+  }
+  loadPreset(DEFAULT_PRESET);
+
+  // ----- panel chrome -----
   paramPanel.appendChild(el("div", "section-header", "preset"));
   const preset = makePresetPicker(DEFAULT_PRESET);
   paramPanel.appendChild(preset.row);
@@ -284,30 +287,12 @@ async function main() {
   paramPanel.appendChild(el("div", "section-header", "observer / star"));
   const nuSlider = makeSlider({
     label: "ν", min: 1, max: 700, step: 1,
-    value: params.nu,
-    format: (v) => `${v.toFixed(0)} Hz`,
+    value: observer.nu, format: (v) => `${v.toFixed(0)} Hz`,
   });
-  paramPanel.appendChild(nuSlider.row);
   const incSlider = makeSlider({
     label: "i", min: 0, max: 180, step: 1,
-    value: params.inc_deg,
-    format: (v) => `${v.toFixed(0)}°`,
+    value: observer.inc_deg, format: (v) => `${v.toFixed(0)}°`,
   });
-  paramPanel.appendChild(incSlider.row);
-
-  paramPanel.appendChild(el("div", "section-header", "hotspot"));
-  const thetaSlider = makeSlider({
-    label: "θ", min: 0, max: 180, step: 1,
-    value: params.spot_theta_deg,
-    format: (v) => `${v.toFixed(0)}°`,
-  });
-  paramPanel.appendChild(thetaSlider.row);
-  const rhoSlider = makeSlider({
-    label: "ρ", min: 0.01, max: 1.5, step: 0.01,
-    value: params.angular_radius,
-    format: (v) => `${v.toFixed(2)} rad`,
-  });
-  paramPanel.appendChild(rhoSlider.row);
   const beamSelect = makeSelect({
     label: "beam",
     options: [
@@ -315,9 +300,15 @@ async function main() {
       { value: 1, text: "cos² (pencil)" },
       { value: 2, text: "1 - cos² (fan)" },
     ],
-    value: params.beaming,
+    value: observer.beaming,
   });
-  paramPanel.appendChild(beamSelect.row);
+  paramPanel.append(nuSlider.row, incSlider.row, beamSelect.row);
+
+  paramPanel.appendChild(el("div", "section-header", "spots"));
+  const spotsContainer = el("div");
+  paramPanel.appendChild(spotsContainer);
+  const addBtn = el("button", "add-spot-btn", "+ add spot");
+  paramPanel.appendChild(addBtn);
 
   const info = el("div");
   info.style.cssText = "margin-top:14px;padding-top:10px;border-top:1px solid var(--border);font-size:11px;color:var(--muted);line-height:1.55;";
@@ -325,11 +316,24 @@ async function main() {
     <div style="margin-bottom:4px;font-weight:600;color:var(--fg);">interaction</div>
     <div>drag on sphere → rotate pulsar</div>
     <div>wheel on sphere → zoom</div>
-    <div>drag curve header → move panel</div>
+    <div>SUBTRACT inherits kT from the ADD whose cap contains it;<br/>an orphaned SUBTRACT is shown dimmed.</div>
   `;
   paramPanel.appendChild(info);
 
-  // ----- Latest-wins compute queue -----
+  // ----- rebuilders -----
+  function rebuildSpots() {
+    spotsContainer.innerHTML = "";
+    const ctx = {
+      allSpots: spots,
+      changed: requestRecompute,
+      remove: (i) => { spots.splice(i, 1); rebuildSpots(); requestRecompute(); },
+      rebuild: rebuildSpots,
+    };
+    spots.forEach((s, i) => spotsContainer.appendChild(buildSpotBlock(s, i, ctx)));
+    addBtn.disabled = spots.length >= MAX_SPOTS;
+  }
+
+  // ----- latest-wins compute queue -----
   let computeBusy = false;
   let computeDirty = false;
 
@@ -339,10 +343,23 @@ async function main() {
     try {
       do {
         computeDirty = false;
+        const shared = {
+          nu: observer.nu,
+          inc: observer.inc_deg * DEG,
+          beaming: observer.beaming,
+          constants: OS1_DEFAULTS,
+        };
+        const engineSpots = spots.map((s) => ({
+          theta: s.theta_deg * DEG,
+          phi: s.phi_deg * DEG,
+          rho: s.rho,
+          mode: s.mode,
+          kT: s.kT,
+        }));
         const t0 = performance.now();
-        const flux = await engine.computePulseProfile(paramsToScenario(params), OS1_DEFAULTS);
+        const flux = await engine.computeMultiSpot(engineSpots, shared);
         lastComputeMs = performance.now() - t0;
-        plot.setProfile(flux, presetName || "custom");
+        plot.setProfile(flux, `${presetName} • ${spots.length} spot${spots.length === 1 ? "" : "s"}`);
         redrawSphere();
         updateStatus();
       } while (computeDirty);
@@ -350,15 +367,17 @@ async function main() {
       computeBusy = false;
     }
   }
-
   function requestRecompute() { runComputeLoop(); }
 
   function redrawSphere() {
     renderer.draw({
-      inc: params.inc_deg * DEG,
-      spot_center_theta: params.spot_theta_deg * DEG,
-      spot_center_phi: 0,
-      angular_radius: params.angular_radius,
+      inc: observer.inc_deg * DEG,
+      spots: spots.map((s) => ({
+        theta: s.theta_deg * DEG,
+        phi: s.phi_deg * DEG,
+        rho: s.rho,
+        mode: s.mode,
+      })),
       observer_phase: observerPhase,
       aspect: sphereCanvas.width / sphereCanvas.height,
       distance: cameraDistance,
@@ -371,29 +390,37 @@ async function main() {
     setStatus([
       `adapter:  ${vendor.trim()}`,
       `preset:   ${presetName}`,
+      `spots:    ${spots.length}`,
       `compute:  ${lastComputeMs.toFixed(1)} ms`,
       `zoom:     ${(CAM_DISTANCE_DEFAULT / cameraDistance).toFixed(2)}×`,
     ].join("\n"));
   }
 
-  // ----- Wire sliders -----
-  nuSlider.onInput((v)     => { params.nu = v;                 requestRecompute(); });
-  incSlider.onInput((v)    => { params.inc_deg = v;            requestRecompute(); });
-  thetaSlider.onInput((v)  => { params.spot_theta_deg = v;     requestRecompute(); });
-  rhoSlider.onInput((v)    => { params.angular_radius = v;     requestRecompute(); });
-  beamSelect.onChange((v)  => { params.beaming = v;            requestRecompute(); });
+  // ----- Wire controls -----
+  nuSlider.onInput((v)    => { observer.nu = v;       requestRecompute(); });
+  incSlider.onInput((v)   => { observer.inc_deg = v;  requestRecompute(); });
+  beamSelect.onChange((v) => { observer.beaming = v;  requestRecompute(); });
 
   preset.onChange((name) => {
-    presetName = name;
-    const p = scenarioToParams(scenarioByName(name));
-    Object.assign(params, p);
-    nuSlider.setValue(p.nu);
-    incSlider.setValue(p.inc_deg);
-    thetaSlider.setValue(p.spot_theta_deg);
-    rhoSlider.setValue(p.angular_radius);
-    beamSelect.setValue(p.beaming);
+    loadPreset(name);
+    nuSlider.setValue(observer.nu);
+    incSlider.setValue(observer.inc_deg);
+    beamSelect.setValue(observer.beaming);
+    rebuildSpots();
     requestRecompute();
   });
+
+  addBtn.addEventListener("click", () => {
+    if (spots.length >= MAX_SPOTS) return;
+    // Default new spot: a smaller ADD offset from spot 1.
+    spots.push({
+      theta_deg: 60, phi_deg: 60, rho: 0.5, mode: "ADD", kT: 0.35,
+    });
+    rebuildSpots();
+    requestRecompute();
+  });
+
+  rebuildSpots();
 
   // ----- Sphere drag -----
   const PHASE_PER_PIXEL = 1 / 600;
@@ -444,8 +471,9 @@ async function main() {
 
   window.__ppm = {
     device, adapter, lensing, engine, renderer, plot,
-    get params() { return { ...params }; },
-    get phase()  { return observerPhase; },
+    get observer() { return { ...observer }; },
+    get spots()    { return spots.map((s) => ({ ...s })); },
+    get phase()    { return observerPhase; },
     get distance() { return cameraDistance; },
   };
 }

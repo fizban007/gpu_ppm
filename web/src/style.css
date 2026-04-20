@@ -182,3 +182,63 @@ html, body {
   color: var(--muted);
   font-family: ui-monospace, monospace;
 }
+
+/* Spot list */
+.spot-block {
+  margin-top: 8px;
+  padding: 8px 10px 6px;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.spot-block.inert {
+  opacity: 0.6;
+  border-color: #5a3a1a;
+}
+.spot-block-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+  font-size: 10px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.spot-block-header .tag {
+  color: var(--accent);
+  font-family: ui-monospace, monospace;
+}
+.spot-remove {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  width: 20px;
+  height: 20px;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0;
+}
+.spot-remove:hover {
+  color: #ff6b6b;
+  border-color: #5a1a1a;
+}
+.add-spot-btn {
+  margin-top: 10px;
+  width: 100%;
+  padding: 7px;
+  background: transparent;
+  color: var(--muted);
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+}
+.add-spot-btn:hover:not(:disabled) {
+  color: var(--fg);
+  border-color: var(--muted);
+}
+.add-spot-btn:disabled { opacity: 0.35; cursor: not-allowed; }

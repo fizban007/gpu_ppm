@@ -61,8 +61,13 @@ struct Params {
     N_cos_psi: u32,
 
     N_cos_alpha: u32,
+    clip_enabled: u32,                 // 1 = keep only patches inside clip cap, 0 = no clip
     _pad0: u32,
     _pad1: u32,
+
+    clip_center_theta: f32,            // valid when clip_enabled != 0;
+    clip_center_phi: f32,              //   expressed in the spot's frame (spot φ = 0),
+    clip_cos_angular_radius: f32,      //   so clip_center_phi = parent.phi - spot.phi
     _pad2: u32,
 };
 
@@ -384,13 +389,21 @@ fn main(
     } else {
         let healpix_i = wg_idx + 1u;
         let jmax = healpix_j_max(healpix_i);
+        let clip_st = sin(P.clip_center_theta);
+        let clip_ct = cos(P.clip_center_theta);
         for (var k: u32 = 0u; k < N_PHI_ITER; k = k + 1u) {
             let hj = k * BLOCK_DIM + tid + 1u;
             if (hj <= jmax) {
                 let phi = healpix_phi(healpix_i, hj);
                 let cos_rho = wg_sin_theta * wg_sin_center_theta * cos(phi)
                             + wg_cos_theta * wg_cos_center_theta;
-                if (cos_rho > wg_cos_angular_radius) {
+                var keep = cos_rho > wg_cos_angular_radius;
+                if (keep && P.clip_enabled == 1u) {
+                    let cos_rho_clip = wg_sin_theta * clip_st * cos(phi - P.clip_center_phi)
+                                     + wg_cos_theta * clip_ct;
+                    keep = cos_rho_clip > P.clip_cos_angular_radius;
+                }
+                if (keep) {
                     let idx = atomicAdd(&wg_N_active_phi, 1u);
                     wg_active_phi[idx] = phi;
                 }
