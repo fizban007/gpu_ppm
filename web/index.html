@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>gpu_ppm — pulse profile visualizer</title>
+<link rel="stylesheet" href="src/style.css">
+</head>
+<body>
+<canvas id="sphere-canvas"></canvas>
+
+<div id="curve-panel" class="panel panel-draggable" style="right: 360px; top: 24px;">
+  <div class="panel-header" data-drag-handle>
+    <span>light curve</span>
+    <span class="panel-hint">drag</span>
+  </div>
+  <div class="panel-body">
+    <canvas id="curve-canvas"></canvas>
+  </div>
+</div>
+
+<aside id="controls" class="panel" style="right: 24px; top: 24px;">
+  <h1>Pulse Profile</h1>
+  <div id="status">initializing…</div>
+  <div id="param-panel"></div>
+</aside>
+
+<script type="module" src="src/main.js"></script>
+</body>
+</html>
