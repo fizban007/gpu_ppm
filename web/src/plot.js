@@ -1,6 +1,8 @@
 // Canvas2D light curve + dashed phase marker.
 
-const PAD = { left: 52, right: 14, top: 14, bottom: 32 };
+const PAD = { left: 62, right: 18, top: 18, bottom: 38 };
+const FONT = "14px ui-monospace, SF Mono, monospace";
+const HEADER_FONT = "14px ui-monospace, SF Mono, monospace";
 const AXIS = "#505566";
 const GRID = "#1d2130";
 const LINE = "#ffb86b";
@@ -94,21 +96,22 @@ export function createPlot(canvas) {
 
     // Labels
     ctx2d.fillStyle = LABEL;
-    ctx2d.font = "11px ui-monospace, SF Mono, monospace";
+    ctx2d.font = FONT;
     ctx2d.textAlign = "right";
     ctx2d.textBaseline = "middle";
     for (let i = 0; i <= 4; i++) {
       const v = fmin + (fmax - fmin) * (1 - i / 4);
       const y = plotY0 + (plotH * i) / 4;
-      ctx2d.fillText(v.toExponential(1), plotX0 - 6, y);
+      ctx2d.fillText(v.toExponential(1), plotX0 - 8, y);
     }
     ctx2d.textAlign = "center";
     ctx2d.textBaseline = "top";
     for (let i = 0; i <= 4; i++) {
       const x = plotX0 + (plotW * i) / 4;
-      ctx2d.fillText((i / 4).toFixed(2), x, plotY0 + plotH + 6);
+      ctx2d.fillText((i / 4).toFixed(2), x, plotY0 + plotH + 8);
     }
 
+    ctx2d.font = HEADER_FONT;
     ctx2d.textAlign = "left";
     ctx2d.textBaseline = "top";
     ctx2d.fillStyle = LABEL;

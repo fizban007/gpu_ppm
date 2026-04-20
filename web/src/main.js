@@ -272,7 +272,8 @@ async function main() {
   const params = scenarioToParams(initialPreset);
   let presetName = DEFAULT_PRESET;
   let observerPhase = 0;
-  let cameraDistance = CAM_DISTANCE_DEFAULT;
+  const INITIAL_ZOOM = 0.35;  // default view is a touch zoomed out
+  let cameraDistance = CAM_DISTANCE_DEFAULT / INITIAL_ZOOM;
   let lastComputeMs = 0;
 
   // ----- UI -----

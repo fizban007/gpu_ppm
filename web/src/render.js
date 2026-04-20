@@ -7,9 +7,11 @@ const PARAMS_SIZE = 112; // 7 vec4s = 7*16
 // (though we hold azimuth fixed and advance `observer_phase` instead — physically
 // equivalent, and keeps the camera relationship simple). Distance is now a
 // runtime param so the mouse wheel can zoom in/out.
+// CAM_DISTANCE_DEFAULT is the "zoom = 1.0×" reference, not the starting
+// distance — the app opens further out (see INITIAL_ZOOM in main.js).
 export const CAM_DISTANCE_DEFAULT = 3.2;
 export const CAM_DISTANCE_MIN = 1.35;  // just outside the unit sphere
-export const CAM_DISTANCE_MAX = 12.0;
+export const CAM_DISTANCE_MAX = 20.0;
 const FOV_Y = 35 * Math.PI / 180;
 
 function normalize3(v) {
