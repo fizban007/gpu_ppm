@@ -1,0 +1,55 @@
+# Build the lensing table on CI and deploy the web/ directory to GitHub Pages.
+# Reference outputs (output/os1*_gpu.txt) aren't produced here because they
+# need CUDA; pack_lensing.py already treats that as non-fatal, so the live
+# site just won't have the ?validate mode.
+
+name: Deploy web/ to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python deps
+        run: pip install --quiet numpy scipy
+
+      - name: Generate lensing table
+        run: python3 c_lensing.py
+
+      - name: Pack table for the web app
+        run: python3 web/pack_lensing.py
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
