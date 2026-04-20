@@ -24,6 +24,14 @@ const N_FINE_PHASE: u32      = 384u;    // N_OUTPUT_PHASE * 3
 const N_FINE_PLUS_1: u32     = 385u;
 const MAX_RING_SIZE: u32     = 1024u;   // 4 * N_SIDE
 
+// Uniform iteration counts for tid-strided loops — used instead of
+// `var ip = tid; loop { if (ip >= N) break; ... }` patterns, so that every
+// workgroupBarrier sits in statically-uniform control flow (Tint in Chrome
+// is strict about this; Naga / Firefox is more forgiving).
+const N_PHI_ITER:   u32 = (MAX_RING_SIZE + BLOCK_DIM - 1u) / BLOCK_DIM;  // 4
+const N_SWEEP_ITER: u32 = (N_FINE_PHASE  + BLOCK_DIM - 1u) / BLOCK_DIM;  // 2
+const N_FILL_ITER:  u32 = N_SWEEP_ITER;
+
 // ---------------- Bindings ----------------
 
 struct Params {
@@ -287,15 +295,6 @@ fn reduce_max_i32(tid: u32, value: i32) -> i32 {
     return wg_reduce[0];
 }
 
-fn clear_output_bins(tid: u32, wg_idx: u32) {
-    var i = tid;
-    loop {
-        if (i >= N_OUTPUT_PHASE) { break; }
-        per_ring_flux[wg_idx * N_OUTPUT_PHASE + i] = 0.0;
-        i = i + BLOCK_DIM;
-    }
-}
-
 // ---------------- Main kernel ----------------
 
 @compute @workgroup_size(256)
@@ -354,7 +353,8 @@ fn main(
     }
     workgroupBarrier();
 
-    // ---- Fill active_phi ----
+    // ---- Fill active_phi (uniform-count outer loop) ----
+    // P.point_source is from a uniform buffer → the outer branch is uniform.
     if (P.point_source == 1u) {
         if (tid == 0u) {
             wg_active_phi[0] = 0.0;
@@ -363,113 +363,110 @@ fn main(
     } else {
         let healpix_i = wg_idx + 1u;
         let jmax = healpix_j_max(healpix_i);
-        var hj = tid + 1u;
-        loop {
-            if (hj > jmax) { break; }
-            let phi = healpix_phi(healpix_i, hj);
-            let cos_rho = wg_sin_theta * wg_sin_center_theta * cos(phi)
-                        + wg_cos_theta * wg_cos_center_theta;
-            if (cos_rho > wg_cos_angular_radius) {
-                let idx = atomicAdd(&wg_N_active_phi, 1u);
-                wg_active_phi[idx] = phi;
+        for (var k: u32 = 0u; k < N_PHI_ITER; k = k + 1u) {
+            let hj = k * BLOCK_DIM + tid + 1u;
+            if (hj <= jmax) {
+                let phi = healpix_phi(healpix_i, hj);
+                let cos_rho = wg_sin_theta * wg_sin_center_theta * cos(phi)
+                            + wg_cos_theta * wg_cos_center_theta;
+                if (cos_rho > wg_cos_angular_radius) {
+                    let idx = atomicAdd(&wg_N_active_phi, 1u);
+                    wg_active_phi[idx] = phi;
+                }
             }
-            hj = hj + BLOCK_DIM;
         }
     }
     workgroupBarrier();
 
     let N_active = atomicLoad(&wg_N_active_phi);
 
-    if (N_active == 0u) {
-        clear_output_bins(tid, wg_idx);
-        return;
-    }
-
-    // ---- Fine-phase sweep ----
+    // ---- Fine-phase sweep (uniform-count loop; per-thread mask) ----
+    // Unlike the CUDA version we never `return` early — we compute everything,
+    // then decide at the end whether to emit zero, so no barrier ever sits in
+    // non-uniform control flow.
     var local_inv_min: i32 = i32(N_FINE_PHASE) + 1;
     var local_inv_max: i32 = -1;
 
-    var ip = tid;
-    loop {
-        if (ip >= N_FINE_PHASE) { break; }
-        let phase_ratio = f32(ip) / f32(N_FINE_PHASE);
-        let phi_o = TWO_PI * phase_ratio;
-        let cos_phi = cos(phi_o);
-        let sin_phi = sin(phi_o);
-        let cos_psi = wg_cc + wg_ss * cos_phi;
+    for (var k: u32 = 0u; k < N_SWEEP_ITER; k = k + 1u) {
+        let ip = k * BLOCK_DIM + tid;
+        if (ip < N_FINE_PHASE) {
+            let phase_ratio = f32(ip) / f32(N_FINE_PHASE);
+            let phi_o = TWO_PI * phase_ratio;
+            let cos_phi = cos(phi_o);
+            let sin_phi = sin(phi_o);
+            let cos_psi = wg_cc + wg_ss * cos_phi;
 
-        var is_visible = true;
-        var flux_val: f32     = 0.0;
-        var redshift_val: f32 = -1.0;
-        var phase_o_val: f32  = -1.0;
+            var is_visible = true;
+            var flux_val: f32     = 0.0;
+            var redshift_val: f32 = -1.0;
+            var phase_o_val: f32  = -1.0;
 
-        if (cos_psi < P.cos_psi_min) { is_visible = false; }
+            if (cos_psi < P.cos_psi_min) { is_visible = false; }
 
-        if (is_visible) {
-            let lres = ca_lf_of_u_cos_psi(wg_u, cos_psi);
-            let cos_alpha = lres.cos_alpha;
-            let lf = lres.lf;
-            let sin_alpha = sqrt(max(0.0, 1.0 - cos_alpha * cos_alpha));
-            var sin_alpha_over_sin_psi: f32;
-            if (cos_psi >= 1.0) {
-                sin_alpha_over_sin_psi = sqrt(lf);
-            } else {
-                let sin_psi = sqrt(max(0.0, 1.0 - cos_psi * cos_psi));
-                sin_alpha_over_sin_psi = sin_alpha / sin_psi;
-            }
-            let cos_sigma = cos_alpha * wg_cos_eta
-                + sin_alpha_over_sin_psi * wg_sin_eta
-                  * (wg_cos_i * wg_sin_theta - wg_sin_i * wg_cos_theta * cos_phi);
-
-            if (cos_sigma <= 0.0) {
-                is_visible = false;
-            } else {
-                let beta = TWO_PI * P.nu * wg_R * wg_sin_theta / wg_uu / C_KM_S;
-                let gamma = 1.0 / sqrt(1.0 - beta * beta);
-                let cos_xi = -sin_alpha_over_sin_psi * wg_sin_i * sin_phi;
-                let delta = 1.0 / (gamma * (1.0 - beta * cos_xi));
-                let delta3 = delta * delta * delta;
-
-                let cdt_over_R = cdt_over_R_of_u_ca(wg_u, cos_alpha);
-                let dt1 = cdt_over_R * wg_R / C_KM_S;
-
-                var dt2: f32 = 0.0;
-                if (cos_alpha >= 0.0) {
-                    dt2 = cal_dt2(wg_R, P.Re, wg_Rs);
+            if (is_visible) {
+                let lres = ca_lf_of_u_cos_psi(wg_u, cos_psi);
+                let cos_alpha = lres.cos_alpha;
+                let lf = lres.lf;
+                let sin_alpha = sqrt(max(0.0, 1.0 - cos_alpha * cos_alpha));
+                var sin_alpha_over_sin_psi: f32;
+                if (cos_psi >= 1.0) {
+                    sin_alpha_over_sin_psi = sqrt(lf);
                 } else {
-                    let tmp = (2.0 * sin_alpha) / sqrt(3.0 * (1.0 - wg_u));
-                    let arg = 3.0 * wg_u / tmp;
-                    let p_over_R = -tmp * cos((acos(arg) + TWO_PI) / 3.0);
-                    let p = p_over_R * wg_R;
-                    dt2 = 2.0 * cal_dt2(p, P.Re, wg_Rs) - cal_dt2(wg_R, P.Re, wg_Rs);
+                    let sin_psi = sqrt(max(0.0, 1.0 - cos_psi * cos_psi));
+                    sin_alpha_over_sin_psi = sin_alpha / sin_psi;
                 }
-                let delta_phase = (dt1 + dt2) * P.nu;
+                let cos_sigma = cos_alpha * wg_cos_eta
+                    + sin_alpha_over_sin_psi * wg_sin_eta
+                      * (wg_cos_i * wg_sin_theta - wg_sin_i * wg_cos_theta * cos_phi);
 
-                let cos_sigma_prime = cos_sigma * delta;
-                var beaming_factor: f32 = 1.0;
-                if (P.beaming == 1u) {
-                    beaming_factor = cos_sigma_prime * cos_sigma_prime;
-                } else if (P.beaming == 2u) {
-                    beaming_factor = 1.0 - cos_sigma_prime * cos_sigma_prime;
+                if (cos_sigma <= 0.0) {
+                    is_visible = false;
+                } else {
+                    let beta = TWO_PI * P.nu * wg_R * wg_sin_theta / wg_uu / C_KM_S;
+                    let gamma = 1.0 / sqrt(1.0 - beta * beta);
+                    let cos_xi = -sin_alpha_over_sin_psi * wg_sin_i * sin_phi;
+                    let delta = 1.0 / (gamma * (1.0 - beta * cos_xi));
+                    let delta3 = delta * delta * delta;
+
+                    let cdt_over_R = cdt_over_R_of_u_ca(wg_u, cos_alpha);
+                    let dt1 = cdt_over_R * wg_R / C_KM_S;
+
+                    var dt2: f32 = 0.0;
+                    if (cos_alpha >= 0.0) {
+                        dt2 = cal_dt2(wg_R, P.Re, wg_Rs);
+                    } else {
+                        let tmp = (2.0 * sin_alpha) / sqrt(3.0 * (1.0 - wg_u));
+                        let arg = 3.0 * wg_u / tmp;
+                        let p_over_R = -tmp * cos((acos(arg) + TWO_PI) / 3.0);
+                        let p = p_over_R * wg_R;
+                        dt2 = 2.0 * cal_dt2(p, P.Re, wg_Rs) - cal_dt2(wg_R, P.Re, wg_Rs);
+                    }
+                    let delta_phase = (dt1 + dt2) * P.nu;
+
+                    let cos_sigma_prime = cos_sigma * delta;
+                    var beaming_factor: f32 = 1.0;
+                    if (P.beaming == 1u) {
+                        beaming_factor = cos_sigma_prime * cos_sigma_prime;
+                    } else if (P.beaming == 2u) {
+                        beaming_factor = 1.0 - cos_sigma_prime * cos_sigma_prime;
+                    }
+
+                    flux_val = wg_uu * delta3 * cos_sigma_prime * lf * gamma
+                             * wg_dS * P.Ibb_div_D2 * beaming_factor;
+                    redshift_val = 1.0 / (delta * wg_uu);
+                    phase_o_val  = phase_ratio + delta_phase;
                 }
+            }
 
-                flux_val = wg_uu * delta3 * cos_sigma_prime * lf * gamma
-                         * wg_dS * P.Ibb_div_D2 * beaming_factor;
-                redshift_val = 1.0 / (delta * wg_uu);
-                phase_o_val  = phase_ratio + delta_phase;
+            wg_fluxes_over_I[ip]    = flux_val;
+            wg_redshift_factors[ip] = redshift_val;
+            wg_phase_o[ip]          = phase_o_val;
+
+            if (!is_visible) {
+                if (i32(ip) < local_inv_min) { local_inv_min = i32(ip); }
+                if (i32(ip) > local_inv_max) { local_inv_max = i32(ip); }
             }
         }
-
-        wg_fluxes_over_I[ip]    = flux_val;
-        wg_redshift_factors[ip] = redshift_val;
-        wg_phase_o[ip]          = phase_o_val;
-
-        if (!is_visible) {
-            if (i32(ip) < local_inv_min) { local_inv_min = i32(ip); }
-            if (i32(ip) > local_inv_max) { local_inv_max = i32(ip); }
-        }
-
-        ip = ip + BLOCK_DIM;
     }
     workgroupBarrier();
 
@@ -479,27 +476,32 @@ fn main(
     let inv_max = reduce_max_i32(tid, local_inv_max);
     workgroupBarrier();
 
-    if (inv_min == 0 || inv_max == i32(N_FINE_PHASE) - 1) {
-        clear_output_bins(tid, wg_idx);
-        return;
-    }
+    // Ring-level skip flag. All branches below use `skip` as a per-thread
+    // mask; control flow around barriers stays uniform.
+    let skip = N_active == 0u
+            || inv_min == 0
+            || inv_max == i32(N_FINE_PHASE) - 1;
 
-    // ---- Fill invisible phases by linear interp ----
-    if (inv_min <= inv_max) {
-        let beg = inv_min - 1;
-        let end = inv_max + 1;
-        let phase0 = wg_phase_o[beg];
-        let phase1 = wg_phase_o[end];
-        let rf0 = wg_redshift_factors[beg];
-        let rf1 = wg_redshift_factors[end];
-        let denom = f32(end - beg);
-        var ii = i32(tid) + inv_min;
-        loop {
-            if (ii > inv_max) { break; }
-            let t = f32(ii - beg) / denom;
+    // ---- Fill invisible phases (uniform-count loop; per-thread mask) ----
+    // When `do_fill` is false (no gap, or we'd be skipping anyway) we still
+    // enter the loop but every per-thread write is masked out.
+    let do_fill = !skip && inv_min <= inv_max;
+    let fill_beg = select(0,     inv_min - 1, do_fill);
+    let fill_end = select(1,     inv_max + 1, do_fill);
+    let fill_lo  = select(0,     inv_min,     do_fill);
+    let fill_hi  = select(-1,    inv_max,     do_fill);
+    let phase0   = wg_phase_o[fill_beg];
+    let phase1   = wg_phase_o[fill_end];
+    let rf0      = wg_redshift_factors[fill_beg];
+    let rf1      = wg_redshift_factors[fill_end];
+    let denom    = f32(fill_end - fill_beg);   // >= 1 by construction
+
+    for (var k: u32 = 0u; k < N_FILL_ITER; k = k + 1u) {
+        let ii = i32(k * BLOCK_DIM + tid) + fill_lo;
+        if (ii >= fill_lo && ii <= fill_hi) {
+            let t = f32(ii - fill_beg) / denom;
             wg_phase_o[ii]          = phase0 + (phase1 - phase0) * t;
             wg_redshift_factors[ii] = rf0    + (rf1    - rf0)    * t;
-            ii = ii + i32(BLOCK_DIM);
         }
     }
     workgroupBarrier();
@@ -513,26 +515,27 @@ fn main(
     workgroupBarrier();
 
     // ---- Integrate into output phase bins ----
-    // Threads 0..N_OUTPUT_PHASE-1 each own one output bin, summing over all active_phi.
+    // Each of the first N_OUTPUT_PHASE threads owns one output bin. When
+    // `skip` is set, we just write zero; otherwise we fold in all active_phi.
     if (tid < N_OUTPUT_PHASE) {
-        let target_phase = f32(tid) / f32(N_OUTPUT_PHASE);
         var sum: f32 = 0.0;
-        var jsav: i32 = 0;
-
-        for (var ia: u32 = 0u; ia < N_active; ia = ia + 1u) {
-            let phase_shift = wg_active_phi[ia] / TWO_PI;
-            let raw = target_phase + phase_shift + 1.0;
-            var patch_phase = raw - floor(raw);
-            if (patch_phase < wg_phase_o[0]) { patch_phase = patch_phase + 1.0; }
-            let h = hunt_phase_o(patch_phase, &jsav);
-            let flux_i = (1.0 - h.a) * wg_fluxes_over_I[h.i]
-                       +        h.a  * wg_fluxes_over_I[h.i + 1];
-            let rf     = (1.0 - h.a) * wg_redshift_factors[h.i]
-                       +        h.a  * wg_redshift_factors[h.i + 1];
-            let E_emit = P.E_obs * rf;
-            sum = sum + flux_i * blackbody_I(E_emit, P.kT);
+        if (!skip) {
+            let target_phase = f32(tid) / f32(N_OUTPUT_PHASE);
+            var jsav: i32 = 0;
+            for (var ia: u32 = 0u; ia < N_active; ia = ia + 1u) {
+                let phase_shift = wg_active_phi[ia] / TWO_PI;
+                let raw = target_phase + phase_shift + 1.0;
+                var patch_phase = raw - floor(raw);
+                if (patch_phase < wg_phase_o[0]) { patch_phase = patch_phase + 1.0; }
+                let h = hunt_phase_o(patch_phase, &jsav);
+                let flux_i = (1.0 - h.a) * wg_fluxes_over_I[h.i]
+                           +        h.a  * wg_fluxes_over_I[h.i + 1];
+                let rf     = (1.0 - h.a) * wg_redshift_factors[h.i]
+                           +        h.a  * wg_redshift_factors[h.i + 1];
+                let E_emit = P.E_obs * rf;
+                sum = sum + flux_i * blackbody_I(E_emit, P.kT);
+            }
         }
-
         per_ring_flux[wg_idx * N_OUTPUT_PHASE + tid] = sum;
     }
 }
