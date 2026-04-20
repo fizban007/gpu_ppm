@@ -15,10 +15,10 @@ import {
   CAM_DISTANCE_MAX,
 } from "./render.js";
 import { createPlot } from "./plot.js";
-import { OS1_SCENARIOS, scenarioByName } from "./scenarios.js";
+import { OS1_SCENARIOS, PRESETS, presetByName } from "./scenarios.js";
 
 const DEG = Math.PI / 180;
-const DEFAULT_PRESET = "os1f";
+const DEFAULT_PRESET = "crescent + spot";
 const MAX_SPOTS = 4;
 
 const statusEl = document.getElementById("status");
@@ -106,14 +106,13 @@ function makePresetPicker(initial) {
   const row = el("div", "select-row");
   const lab = el("label", null, "preset");
   const sel = el("select", "control-select");
-  for (const sc of OS1_SCENARIOS) {
+  for (const p of PRESETS) {
     const opt = el("option");
-    opt.value = sc.name;
-    const beam = { 0: "iso", 1: "cos²", 2: "1-cos²" }[sc.beaming];
-    const deg = (r) => (r / DEG).toFixed(0);
-    const arLbl = sc.angular_radius < 0.1 ? "pt" : `${sc.angular_radius.toFixed(2)}rad`;
-    opt.textContent = `${sc.name}  ν=${sc.nu} θ=${deg(sc.spot_center_theta)}° i=${deg(sc.inc)}° ρ=${arLbl} ${beam}`;
-    if (sc.name === initial) opt.selected = true;
+    opt.value = p.name;
+    const beam = { 0: "iso", 1: "cos²", 2: "1-cos²" }[p.beaming];
+    const n = p.spots.length;
+    opt.textContent = `${p.name}  ν=${p.nu} i=${p.inc_deg.toFixed(0)}° ${beam} (${n} spot${n === 1 ? "" : "s"})`;
+    if (p.name === initial) opt.selected = true;
     sel.appendChild(opt);
   }
   row.append(lab, sel);
@@ -264,18 +263,12 @@ async function main() {
 
   function loadPreset(name) {
     presetName = name;
-    const sc = scenarioByName(name);
-    observer.nu = sc.nu;
-    observer.inc_deg = sc.inc / DEG;
-    observer.beaming = sc.beaming;
+    const p = presetByName(name);
+    observer.nu = p.nu;
+    observer.inc_deg = p.inc_deg;
+    observer.beaming = p.beaming;
     spots.length = 0;
-    spots.push({
-      theta_deg: sc.spot_center_theta / DEG,
-      phi_deg: 0,
-      rho: sc.angular_radius,
-      mode: "ADD",
-      kT: OS1_DEFAULTS.kT,
-    });
+    for (const s of p.spots) spots.push({ ...s });  // clone so edits don't mutate preset
   }
   loadPreset(DEFAULT_PRESET);
 
@@ -377,6 +370,7 @@ async function main() {
         phi: s.phi_deg * DEG,
         rho: s.rho,
         mode: s.mode,
+        kT: s.kT,
       })),
       observer_phase: observerPhase,
       aspect: sphereCanvas.width / sphereCanvas.height,

@@ -7,8 +7,9 @@ export const CAM_DISTANCE_MAX = 20.0;
 const FOV_Y = 35 * Math.PI / 180;
 
 const MAX_SPOTS = 4;
-// RenderParams layout: 6 x vec4 of chrome + 4 x vec4 of spots = 10 * 16 = 160 bytes.
-const PARAMS_SIZE = 160;
+// RenderParams layout: 6 x vec4 of chrome + 4 x vec4 of spots + 1 x vec4 of
+// per-spot kTs = 11 * 16 = 176 bytes.
+const PARAMS_SIZE = 176;
 
 function normalize3(v) {
   const n = Math.hypot(v[0], v[1], v[2]) || 1;
@@ -100,9 +101,14 @@ export async function createSphereRenderer(device, canvas) {
       } else {
         sf[base + 0] = 0;
         sf[base + 1] = 0;
-        sf[base + 2] = 1.0;   // cos(0) — no effect since mode=0 short-circuits
+        sf[base + 2] = 1.0;
         sf[base + 3] = 0.0;
       }
+    }
+
+    // spots_kt: one vec4 packing 4 scalar kTs.
+    for (let k = 0; k < MAX_SPOTS; k++) {
+      sf[40 + k] = k < spots.length ? (spots[k].kT ?? 0) : 0;
     }
 
     device.queue.writeBuffer(paramsBuffer, 0, scratch);

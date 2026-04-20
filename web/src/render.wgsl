@@ -18,7 +18,8 @@ struct RenderParams {
     cam_fwd:   vec4<f32>,
     view:      vec4<f32>,              // x=aspect  y=tan(fovy/2)  z=observer_phase  w=spot_count
     light_dir: vec4<f32>,
-    spots:     array<vec4<f32>, 4>,    // MAX_SPOTS
+    spots:     array<vec4<f32>, 4>,    // (θ, φ, cos_ar, mode) per slot
+    spots_kt:  vec4<f32>,              // kT per slot (keV); SUBTRACT slots' kT is unused
 };
 
 @group(0) @binding(0) var<uniform> R: RenderParams;
@@ -44,6 +45,27 @@ fn vs_main(@builtin(vertex_index) vid: u32) -> VOut {
 fn bg_color(dir: vec3<f32>) -> vec3<f32> {
     let t = 0.5 + 0.5 * dir.y;
     return mix(vec3<f32>(0.02, 0.03, 0.05), vec3<f32>(0.05, 0.05, 0.09), t);
+}
+
+// Map kT (keV) to an indicative hot color: deep red (cool) → orange
+// (≈ 0.35 keV, the OS1 default) → near-white (hot). Log-scaled over the
+// slider range [0.05, 3.0] so small kT changes at the low end are visible.
+fn hot_color_for_kT(kT: f32) -> vec3<f32> {
+    let log_lo = -4.321928;  // log2(0.05)
+    let log_hi =  1.584963;  // log2(3.0)
+    let t = clamp((log2(max(kT, 1e-3)) - log_lo) / (log_hi - log_lo), 0.0, 1.0);
+    let c1 = vec3<f32>(0.80, 0.25, 0.12);  // deep red
+    let c2 = vec3<f32>(1.00, 0.62, 0.20);  // warm orange (default)
+    let c3 = vec3<f32>(1.00, 0.96, 0.85);  // off-white
+    if (t < 0.5) { return mix(c1, c2, t * 2.0); }
+    return mix(c2, c3, (t - 0.5) * 2.0);
+}
+
+fn spot_kT(index: u32) -> f32 {
+    if (index == 0u) { return R.spots_kt.x; }
+    if (index == 1u) { return R.spots_kt.y; }
+    if (index == 2u) { return R.spots_kt.z; }
+    return R.spots_kt.w;
 }
 
 @fragment
@@ -73,27 +95,26 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
 
     // Base (cold) surface color, independent of spots.
     let surface_cold = vec3<f32>(0.22, 0.26, 0.38);
-    let surface_hot  = vec3<f32>(1.00, 0.62, 0.20);
     var base = surface_cold;
 
-    // Painter's-order sweep over spots: ADD blends toward hot; SUBTRACT
-    // blends back toward cold. Both use a smooth edge for antialiasing.
+    // Painter's-order sweep over spots: ADD blends toward its kT-mapped
+    // hot color; SUBTRACT blends back toward cold.
     let spot_count = u32(spot_count_f);
     for (var k: u32 = 0u; k < MAX_SPOTS; k = k + 1u) {
         if (k >= spot_count) { break; }
         let s = R.spots[k];
         let mode = s.w;
-        if (mode == 0.0) { continue; }                       // inactive slot
+        if (mode == 0.0) { continue; }
         let s_theta = s.x;
-        let s_phi   = s.y + TWO_PI * observer_phase;         // rotate with time
+        let s_phi   = s.y + TWO_PI * observer_phase;
         let cos_ar  = s.z;
         let cos_rho = sin_theta * sin(s_theta) * cos(phi - s_phi)
                     + cos_theta * cos(s_theta);
         let edge = smoothstep(cos_ar - 0.004, cos_ar + 0.004, cos_rho);
         if (mode > 0.0) {
-            base = mix(base, surface_hot,  edge);            // ADD
+            base = mix(base, hot_color_for_kT(spot_kT(k)), edge);   // ADD
         } else {
-            base = mix(base, surface_cold, edge);            // SUBTRACT
+            base = mix(base, surface_cold,                 edge);   // SUBTRACT
         }
     }
 
