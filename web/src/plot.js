@@ -39,11 +39,13 @@ export function createPlot(canvas) {
     const plotW = w - PAD.left - PAD.right;
     const plotH = h - PAD.top - PAD.bottom;
 
-    let fmin = Infinity, fmax = -Infinity;
-    for (const v of fluxData) { if (v < fmin) fmin = v; if (v > fmax) fmax = v; }
-    if (fmax === fmin) { fmax = fmin + 1; }
-    const pad = (fmax - fmin) * 0.08;
-    fmin -= pad; fmax += pad;
+    // y-axis anchored at zero; auto-scale only the upper bound so the
+    // amplitude is readable across parameter changes.
+    const fmin = 0;
+    let fmax = 0;
+    for (const v of fluxData) { if (v > fmax) fmax = v; }
+    if (fmax <= 0) { fmax = 1; }
+    fmax += fmax * 0.08;
 
     // Grid
     ctx2d.strokeStyle = GRID;

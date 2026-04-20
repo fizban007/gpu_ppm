@@ -305,6 +305,27 @@ fn main(
     let wg_idx: u32 = wg_id.x;
     let tid: u32    = local_id.x;
 
+    // ---- Fast-path: skip rings whose theta doesn't overlap the spot ----
+    // A HEALPix ring at colatitude θ_ring contains a point inside the spot
+    // (centered at θ_c, angular radius ρ) iff cos(θ_ring − θ_c) > cos(ρ),
+    // i.e. sin·sin + cos·cos > cos(ρ). All inputs are uniform within the
+    // workgroup (uniform buffer + workgroup_id), so Tint accepts the early
+    // return as uniform control flow. Skipped only in HEALPix mode; the
+    // point-source dispatch is a single ring so there's nothing to skip.
+    if (P.point_source == 0u) {
+        let ring_ct = healpix_cos_theta_ring(wg_idx + 1u);
+        let ring_st = sqrt(max(0.0, 1.0 - ring_ct * ring_ct));
+        let spot_ct = cos(P.spot_center_theta);
+        let spot_st = sin(P.spot_center_theta);
+        let cos_rho_max = ring_st * spot_st + ring_ct * spot_ct;
+        if (cos_rho_max <= cos(P.angular_radius)) {
+            if (tid < N_OUTPUT_PHASE) {
+                per_ring_flux[wg_idx * N_OUTPUT_PHASE + tid] = 0.0;
+            }
+            return;
+        }
+    }
+
     // ---- Thread-0 init of per-ring state ----
     if (tid == 0u) {
         atomicStore(&wg_N_active_phi, 0u);
