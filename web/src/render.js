@@ -65,7 +65,10 @@ export async function createSphereRenderer(device, canvas) {
     const ci = Math.cos(inc);
     const camPos = [d * si, 0, d * ci];
     const fwd = normalize3([-camPos[0], -camPos[1], -camPos[2]]);
-    const worldUp = [0, 0, 1];
+    // Swap the reference-up axis when the view direction lines up with the
+    // spin axis (inc ≈ 0 or 180°); otherwise cross(fwd, worldUp) = 0 and the
+    // camera basis collapses, making every ray point at the same place.
+    const worldUp = Math.abs(fwd[2]) > 0.9995 ? [0, 1, 0] : [0, 0, 1];
     const right = normalize3(cross3(fwd, worldUp));
     const up = cross3(right, fwd);
 
