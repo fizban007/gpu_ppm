@@ -7,9 +7,9 @@ export const CAM_DISTANCE_MAX = 20.0;
 const FOV_Y = 35 * Math.PI / 180;
 
 const MAX_SPOTS = 4;
-// RenderParams layout: 6 x vec4 of chrome + 4 x vec4 of spots + 1 x vec4 of
-// per-spot kTs = 11 * 16 = 176 bytes.
-const PARAMS_SIZE = 176;
+// RenderParams layout: 6 vec4 chrome + 4 vec4 spots + 1 vec4 spot kTs +
+// 1 vec4 dipole params = 12 * 16 = 192 bytes.
+const PARAMS_SIZE = 192;
 
 function normalize3(v) {
   const n = Math.hypot(v[0], v[1], v[2]) || 1;
@@ -59,7 +59,9 @@ export async function createSphereRenderer(device, canvas) {
   const sf = new Float32Array(scratch);
 
   // spots: array of {theta, phi, rho, mode: "ADD"|"SUB"}
-  function writeParams({ inc, spots, observer_phase, aspect, distance }) {
+  // dipole (optional): { mag_incl, alpha0_dim, T0, display_mode }
+  //   display_mode: 0=spots (default), 1=T-map, 2=|j| magnitude
+  function writeParams({ inc, spots, observer_phase, aspect, distance, dipole }) {
     const d = distance ?? CAM_DISTANCE_DEFAULT;
     const si = Math.sin(inc);
     const ci = Math.cos(inc);
@@ -112,6 +114,17 @@ export async function createSphereRenderer(device, canvas) {
     // spots_kt: one vec4 packing 4 scalar kTs.
     for (let k = 0; k < MAX_SPOTS; k++) {
       sf[40 + k] = k < spots.length ? (spots[k].kT ?? 0) : 0;
+    }
+
+    // dipole: (mag_incl, alpha0_dim, T0, display_mode). When no dipole is
+    // supplied, everything is zero and display_mode = 0 (spots path).
+    if (dipole) {
+      sf[44] = dipole.mag_incl ?? 0;
+      sf[45] = dipole.alpha0_dim ?? 0;
+      sf[46] = dipole.T0 ?? 0;
+      sf[47] = dipole.display_mode ?? 0;
+    } else {
+      sf[44] = 0; sf[45] = 0; sf[46] = 0; sf[47] = 0;
     }
 
     device.queue.writeBuffer(paramsBuffer, 0, scratch);

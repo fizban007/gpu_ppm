@@ -1,13 +1,15 @@
-// Interactive pulsar pulse-profile visualizer, multi-spot build.
+// Interactive pulsar pulse-profile visualizer, multi-mode build.
 //
-// Interaction:
-//   - drag on sphere       → change observer phase
-//   - wheel on sphere      → zoom camera
-//   - drag curve-panel bar → reposition the panel
-//   - sliders / dropdowns  → mutate shared or per-spot params, recompute + redraw
-//   - add/remove spot      → up to 4 spots; first SUBTRACT with no enclosing ADD is inert
+// Emission models:
+//   - spots   — user-placed ADD/SUBTRACT spherical-cap hotspots (kernel.wgsl)
+//   - dipole  — physics-derived polar-cap temperature map from a centered
+//               magnetic dipole (kernel_dipole.wgsl)
+//
+// The two kernels share the lensing table and observer geometry but run on
+// independent compute pipelines.
 
 import { createPulseEngine, OS1_DEFAULTS, findParent } from "./compute.js";
+import { createDipoleEngine } from "./compute_dipole.js";
 import {
   createSphereRenderer,
   CAM_DISTANCE_DEFAULT,
@@ -20,6 +22,13 @@ import { OS1_SCENARIOS, PRESETS, presetByName } from "./scenarios.js";
 const DEG = Math.PI / 180;
 const DEFAULT_PRESET = "crescent + spot";
 const MAX_SPOTS = 4;
+
+// α₀ R/μ = √(3/2) (Ω R/c) (1 + sin²ι/5). c in km/s so Re (km) × ν (Hz) lines up.
+const C_KM_S = 299792.458;
+function alpha0Dim(nu_hz, Re_km, iota_rad) {
+  const si = Math.sin(iota_rad);
+  return Math.sqrt(1.5) * (2 * Math.PI * nu_hz * Re_km / C_KM_S) * (1 + (si * si) / 5);
+}
 
 const statusEl = document.getElementById("status");
 const paramPanel = document.getElementById("param-panel");
@@ -61,7 +70,7 @@ async function loadLensing(device) {
   return { header, buffers };
 }
 
-// ------------ Controls ------------
+// ------------ Control widgets ------------
 
 function makeSlider({ label, min, max, step, value, format }) {
   const row = el("div", "slider-row");
@@ -110,8 +119,12 @@ function makePresetPicker(initial) {
     const opt = el("option");
     opt.value = p.name;
     const beam = { 0: "iso", 1: "cos²", 2: "1-cos²" }[p.beaming];
-    const n = p.spots.length;
-    opt.textContent = `${p.name}  ν=${p.nu} i=${p.inc_deg.toFixed(0)}° ${beam} (${n} spot${n === 1 ? "" : "s"})`;
+    if (p.emission_mode === "dipole") {
+      opt.textContent = `${p.name}  ν=${p.nu} i=${p.inc_deg.toFixed(0)}° ${beam}`;
+    } else {
+      const n = p.spots.length;
+      opt.textContent = `${p.name}  ν=${p.nu} i=${p.inc_deg.toFixed(0)}° ${beam} (${n} spot${n === 1 ? "" : "s"})`;
+    }
     if (p.name === initial) opt.selected = true;
     sel.appendChild(opt);
   }
@@ -121,6 +134,8 @@ function makePresetPicker(initial) {
     onChange(cb) { sel.addEventListener("change", () => cb(sel.value)); },
   };
 }
+
+// ------------ Drag-to-move panel ------------
 
 function makeDraggable(panel, handle) {
   let dragging = false, offX = 0, offY = 0;
@@ -153,11 +168,10 @@ function makeDraggable(panel, handle) {
   handle.addEventListener("pointercancel", end);
 }
 
-// ------------ Spot UI ------------
+// ------------ Spot block (spots mode only) ------------
 
 function buildSpotBlock(spot, index, ctx) {
   const block = el("div", "spot-block");
-
   const header = el("div", "spot-block-header");
   const title = el("span");
   title.innerHTML = `spot ${index + 1} &nbsp;<span class="tag">${spot.mode}</span>`;
@@ -188,7 +202,6 @@ function buildSpotBlock(spot, index, ctx) {
     label: "kT", min: 0.05, max: 3.0, step: 0.01,
     value: spot.kT, format: (v) => `${v.toFixed(2)} keV`,
   });
-
   block.append(thetaSlider.row, phiSlider.row, rhoSlider.row, modeSelect.row, kTSlider.row);
 
   const applyMode = () => {
@@ -204,18 +217,16 @@ function buildSpotBlock(spot, index, ctx) {
   modeSelect.onChange((v) => {
     spot.mode = v === 0 ? "ADD" : "SUB";
     applyMode();
-    ctx.changed();   // changing mode also needs a full rebuild for the "inert" class
+    ctx.changed();
     ctx.rebuild();
   });
 
-  // Mark inert SUBTRACTs (no parent ADD contains their center).
   if (spot.mode === "SUB") {
     const adds = ctx.allSpots.filter((s) => s.mode === "ADD")
       .map((s) => ({ theta: s.theta_deg * DEG, phi: s.phi_deg * DEG, rho: s.rho }));
     const self = { theta: spot.theta_deg * DEG, phi: spot.phi_deg * DEG };
     if (!findParent(adds, self)) block.classList.add("inert");
   }
-
   return block;
 }
 
@@ -246,15 +257,18 @@ async function main() {
   const lensing = await loadLensing(device);
 
   setStatus("compiling pipelines…");
-  const engine   = await createPulseEngine(device, lensing);
-  const renderer = await createSphereRenderer(device, sphereCanvas);
-  const plot     = createPlot(curveCanvas);
+  const spotEngine   = await createPulseEngine(device, lensing);
+  const dipoleEngine = await createDipoleEngine(device, lensing);
+  const renderer     = await createSphereRenderer(device, sphereCanvas);
+  const plot         = createPlot(curveCanvas);
 
   makeDraggable(curvePanel, curveHandle);
 
-  // ----- state -----
+  // ---------- state ----------
   const observer = { nu: 600, inc_deg: 80, beaming: 0 };
   const spots = [];
+  const dipole = { mag_incl_deg: 45, T0: 0.40, display_mode: 1 };   // 1 = T-map, 2 = |j|
+  let emissionMode = "spots";
   let presetName = DEFAULT_PRESET;
   let observerPhase = 0;
   const INITIAL_ZOOM = 0.35;
@@ -267,15 +281,32 @@ async function main() {
     observer.nu = p.nu;
     observer.inc_deg = p.inc_deg;
     observer.beaming = p.beaming;
-    spots.length = 0;
-    for (const s of p.spots) spots.push({ ...s });  // clone so edits don't mutate preset
+    emissionMode = p.emission_mode ?? "spots";
+    if (emissionMode === "dipole") {
+      dipole.mag_incl_deg = p.dipole.mag_incl_deg;
+      dipole.T0 = p.dipole.T0;
+    } else {
+      spots.length = 0;
+      for (const s of p.spots) spots.push({ ...s });
+    }
   }
   loadPreset(DEFAULT_PRESET);
 
-  // ----- panel chrome -----
+  // ---------- preset + shared controls ----------
   paramPanel.appendChild(el("div", "section-header", "preset"));
   const preset = makePresetPicker(DEFAULT_PRESET);
   paramPanel.appendChild(preset.row);
+
+  paramPanel.appendChild(el("div", "section-header", "emission"));
+  const modeSelect = makeSelect({
+    label: "model",
+    options: [
+      { value: 0, text: "spots" },
+      { value: 1, text: "dipole" },
+    ],
+    value: emissionMode === "dipole" ? 1 : 0,
+  });
+  paramPanel.appendChild(modeSelect.row);
 
   paramPanel.appendChild(el("div", "section-header", "observer / star"));
   const nuSlider = makeSlider({
@@ -297,11 +328,29 @@ async function main() {
   });
   paramPanel.append(nuSlider.row, incSlider.row, beamSelect.row);
 
-  paramPanel.appendChild(el("div", "section-header", "spots"));
-  const spotsContainer = el("div");
-  paramPanel.appendChild(spotsContainer);
-  const addBtn = el("button", "add-spot-btn", "+ add spot");
-  paramPanel.appendChild(addBtn);
+  // ---------- mutex panels ----------
+  const spotsHeader  = el("div", "section-header", "spots");
+  const spotsBody    = el("div");
+  const addBtn       = el("button", "add-spot-btn", "+ add spot");
+
+  const dipoleHeader = el("div", "section-header", "dipole");
+  const dipoleBody   = el("div");
+  const iotaSlider   = makeSlider({
+    label: "ι", min: 0, max: 90, step: 1,
+    value: dipole.mag_incl_deg, format: (v) => `${v.toFixed(0)}°`,
+  });
+  const T0Slider     = makeSlider({
+    label: "T₀", min: 0.05, max: 2.0, step: 0.01,
+    value: dipole.T0, format: (v) => `${v.toFixed(2)} keV`,
+  });
+  const displaySelect = makeSelect({
+    label: "show",
+    options: [{ value: 1, text: "temperature" }, { value: 2, text: "|j| (current)" }],
+    value: dipole.display_mode,
+  });
+  dipoleBody.append(iotaSlider.row, T0Slider.row, displaySelect.row);
+
+  paramPanel.append(spotsHeader, spotsBody, addBtn, dipoleHeader, dipoleBody);
 
   const info = el("div");
   info.style.cssText = "margin-top:14px;padding-top:10px;border-top:1px solid var(--border);font-size:11px;color:var(--muted);line-height:1.55;";
@@ -309,24 +358,34 @@ async function main() {
     <div style="margin-bottom:4px;font-weight:600;color:var(--fg);">interaction</div>
     <div>drag on sphere → rotate pulsar</div>
     <div>wheel on sphere → zoom</div>
-    <div>SUBTRACT inherits kT from the ADD whose cap contains it;<br/>an orphaned SUBTRACT is shown dimmed.</div>
+    <div>drag curve header → move panel</div>
   `;
   paramPanel.appendChild(info);
 
-  // ----- rebuilders -----
+  // ---------- Mutex panel visibility ----------
+  function applyModeVisibility() {
+    const showSpots  = emissionMode === "spots";
+    spotsHeader.style.display  = showSpots ? "" : "none";
+    spotsBody.style.display    = showSpots ? "" : "none";
+    addBtn.style.display       = showSpots ? "" : "none";
+    dipoleHeader.style.display = showSpots ? "none" : "";
+    dipoleBody.style.display   = showSpots ? "none" : "";
+  }
+
+  // ---------- Spot list (rebuilt on add/remove/mode-change) ----------
   function rebuildSpots() {
-    spotsContainer.innerHTML = "";
+    spotsBody.innerHTML = "";
     const ctx = {
       allSpots: spots,
       changed: requestRecompute,
       remove: (i) => { spots.splice(i, 1); rebuildSpots(); requestRecompute(); },
       rebuild: rebuildSpots,
     };
-    spots.forEach((s, i) => spotsContainer.appendChild(buildSpotBlock(s, i, ctx)));
+    spots.forEach((s, i) => spotsBody.appendChild(buildSpotBlock(s, i, ctx)));
     addBtn.disabled = spots.length >= MAX_SPOTS;
   }
 
-  // ----- latest-wins compute queue -----
+  // ---------- Latest-wins compute queue ----------
   let computeBusy = false;
   let computeDirty = false;
 
@@ -336,23 +395,37 @@ async function main() {
     try {
       do {
         computeDirty = false;
-        const shared = {
-          nu: observer.nu,
-          inc: observer.inc_deg * DEG,
-          beaming: observer.beaming,
-          constants: OS1_DEFAULTS,
-        };
-        const engineSpots = spots.map((s) => ({
-          theta: s.theta_deg * DEG,
-          phi: s.phi_deg * DEG,
-          rho: s.rho,
-          mode: s.mode,
-          kT: s.kT,
-        }));
         const t0 = performance.now();
-        const flux = await engine.computeMultiSpot(engineSpots, shared);
+        let flux;
+        if (emissionMode === "dipole") {
+          flux = await dipoleEngine.computeDipoleProfile(
+            {
+              nu: observer.nu,
+              mag_incl: dipole.mag_incl_deg * DEG,
+              obs_incl: observer.inc_deg * DEG,
+              T0: dipole.T0,
+              beaming: observer.beaming,
+            },
+            OS1_DEFAULTS,
+          );
+        } else {
+          const shared = {
+            nu: observer.nu,
+            inc: observer.inc_deg * DEG,
+            beaming: observer.beaming,
+            constants: OS1_DEFAULTS,
+          };
+          const engineSpots = spots.map((s) => ({
+            theta: s.theta_deg * DEG,
+            phi: s.phi_deg * DEG,
+            rho: s.rho,
+            mode: s.mode,
+            kT: s.kT,
+          }));
+          flux = await spotEngine.computeMultiSpot(engineSpots, shared);
+        }
         lastComputeMs = performance.now() - t0;
-        plot.setProfile(flux, `${presetName} • ${spots.length} spot${spots.length === 1 ? "" : "s"}`);
+        plot.setProfile(flux, labelForStatus());
         redrawSphere();
         updateStatus();
       } while (computeDirty);
@@ -362,8 +435,13 @@ async function main() {
   }
   function requestRecompute() { runComputeLoop(); }
 
+  function labelForStatus() {
+    if (emissionMode === "dipole") return `${presetName} • dipole`;
+    return `${presetName} • ${spots.length} spot${spots.length === 1 ? "" : "s"}`;
+  }
+
   function redrawSphere() {
-    renderer.draw({
+    const p = {
       inc: observer.inc_deg * DEG,
       spots: spots.map((s) => ({
         theta: s.theta_deg * DEG,
@@ -375,48 +453,79 @@ async function main() {
       observer_phase: observerPhase,
       aspect: sphereCanvas.width / sphereCanvas.height,
       distance: cameraDistance,
-    });
+    };
+    if (emissionMode === "dipole") {
+      p.dipole = {
+        mag_incl: dipole.mag_incl_deg * DEG,
+        alpha0_dim: alpha0Dim(observer.nu, OS1_DEFAULTS.Re, dipole.mag_incl_deg * DEG),
+        T0: dipole.T0,
+        display_mode: dipole.display_mode,
+      };
+    }
+    renderer.draw(p);
     plot.setPhase(observerPhase);
   }
 
   function updateStatus() {
     const vendor = (adapter.info?.vendor ?? "?") + " " + (adapter.info?.architecture ?? "");
-    setStatus([
+    const lines = [
       `adapter:  ${vendor.trim()}`,
       `preset:   ${presetName}`,
-      `spots:    ${spots.length}`,
-      `compute:  ${lastComputeMs.toFixed(1)} ms`,
-      `zoom:     ${(CAM_DISTANCE_DEFAULT / cameraDistance).toFixed(2)}×`,
-    ].join("\n"));
+      `model:    ${emissionMode}`,
+    ];
+    if (emissionMode === "dipole") {
+      lines.push(`ι: ${dipole.mag_incl_deg.toFixed(0)}°  T₀: ${dipole.T0.toFixed(2)} keV`);
+    } else {
+      lines.push(`spots:    ${spots.length}`);
+    }
+    lines.push(`compute:  ${lastComputeMs.toFixed(1)} ms`);
+    lines.push(`zoom:     ${(CAM_DISTANCE_DEFAULT / cameraDistance).toFixed(2)}×`);
+    setStatus(lines.join("\n"));
   }
 
-  // ----- Wire controls -----
+  // ---------- Wire shared controls ----------
   nuSlider.onInput((v)    => { observer.nu = v;       requestRecompute(); });
   incSlider.onInput((v)   => { observer.inc_deg = v;  requestRecompute(); });
   beamSelect.onChange((v) => { observer.beaming = v;  requestRecompute(); });
+
+  iotaSlider.onInput((v)  => { dipole.mag_incl_deg = v; requestRecompute(); });
+  T0Slider.onInput((v)    => { dipole.T0 = v;           requestRecompute(); });
+  displaySelect.onChange((v) => {
+    dipole.display_mode = v;
+    redrawSphere();     // render-only change, no recompute
+    updateStatus();
+  });
+
+  modeSelect.onChange((v) => {
+    emissionMode = v === 1 ? "dipole" : "spots";
+    applyModeVisibility();
+    requestRecompute();
+  });
 
   preset.onChange((name) => {
     loadPreset(name);
     nuSlider.setValue(observer.nu);
     incSlider.setValue(observer.inc_deg);
     beamSelect.setValue(observer.beaming);
+    iotaSlider.setValue(dipole.mag_incl_deg);
+    T0Slider.setValue(dipole.T0);
+    modeSelect.setValue(emissionMode === "dipole" ? 1 : 0);
+    applyModeVisibility();
     rebuildSpots();
     requestRecompute();
   });
 
   addBtn.addEventListener("click", () => {
     if (spots.length >= MAX_SPOTS) return;
-    // Default new spot: a smaller ADD offset from spot 1.
-    spots.push({
-      theta_deg: 60, phi_deg: 60, rho: 0.5, mode: "ADD", kT: 0.35,
-    });
+    spots.push({ theta_deg: 60, phi_deg: 60, rho: 0.5, mode: "ADD", kT: 0.35 });
     rebuildSpots();
     requestRecompute();
   });
 
+  applyModeVisibility();
   rebuildSpots();
 
-  // ----- Sphere drag -----
+  // ---------- Sphere drag ----------
   const PHASE_PER_PIXEL = 1 / 600;
   let dragging = false, lastX = 0;
   sphereCanvas.addEventListener("pointerdown", (e) => {
@@ -439,7 +548,7 @@ async function main() {
   sphereCanvas.addEventListener("pointerup", endDrag);
   sphereCanvas.addEventListener("pointercancel", endDrag);
 
-  // ----- Wheel zoom -----
+  // ---------- Wheel zoom ----------
   const ZOOM_SENSITIVITY = 0.0015;
   sphereCanvas.addEventListener(
     "wheel",
@@ -453,22 +562,21 @@ async function main() {
     { passive: false },
   );
 
-  // ----- Resize -----
   window.addEventListener("resize", () => {
     resizeAll();
     redrawSphere();
     plot.resize();
   });
 
-  // ----- Initial compute + draw -----
   await runComputeLoop();
 
   window.__ppm = {
-    device, adapter, lensing, engine, renderer, plot,
+    device, adapter, lensing, spotEngine, dipoleEngine, renderer, plot,
     get observer() { return { ...observer }; },
     get spots()    { return spots.map((s) => ({ ...s })); },
+    get dipole()   { return { ...dipole }; },
+    get mode()     { return emissionMode; },
     get phase()    { return observerPhase; },
-    get distance() { return cameraDistance; },
   };
 }
 

@@ -52,6 +52,7 @@ export const MULTI_SPOT_PRESETS = [
     nu: 400,
     inc_deg: 65,
     beaming: 0,
+    emission_mode: "spots",
     spots: [
       // A crescent sitting near the equator: large ADD with an offset SUB inside it.
       { theta_deg: 60, phi_deg: 0,   rho: 0.50, mode: "ADD", kT: 0.40 },
@@ -62,12 +63,32 @@ export const MULTI_SPOT_PRESETS = [
   },
 ];
 
+export const DIPOLE_PRESETS = [
+  {
+    name: "dipole (centered, ι=45°)",
+    nu: 400,
+    inc_deg: 65,
+    beaming: 0,
+    emission_mode: "dipole",
+    dipole: { mag_incl_deg: 45, T0: 0.40 },
+  },
+  {
+    name: "dipole (aligned, ι=10°)",
+    nu: 400,
+    inc_deg: 65,
+    beaming: 0,
+    emission_mode: "dipole",
+    dipole: { mag_incl_deg: 10, T0: 0.40 },
+  },
+];
+
 function os1AsPreset(sc) {
   return {
     name: sc.name,
     nu: sc.nu,
     inc_deg: sc.inc / DEG,
     beaming: sc.beaming,
+    emission_mode: "spots",
     spots: [{
       theta_deg: sc.spot_center_theta / DEG,
       phi_deg: 0,
@@ -80,6 +101,7 @@ function os1AsPreset(sc) {
 
 export const PRESETS = [
   ...MULTI_SPOT_PRESETS,
+  ...DIPOLE_PRESETS,
   ...OS1_SCENARIOS.map(os1AsPreset),
 ];
 
