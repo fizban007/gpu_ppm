@@ -8,8 +8,8 @@ const FOV_Y = 35 * Math.PI / 180;
 
 const MAX_SPOTS = 4;
 // RenderParams layout: 6 vec4 chrome + 4 vec4 spots + 1 vec4 spot kTs +
-// 1 vec4 dipole params = 12 * 16 = 192 bytes.
-const PARAMS_SIZE = 192;
+// 1 vec4 dipole params + 1 vec4 dipole shift = 13 * 16 = 208 bytes.
+const PARAMS_SIZE = 208;
 
 function normalize3(v) {
   const n = Math.hypot(v[0], v[1], v[2]) || 1;
@@ -123,8 +123,14 @@ export async function createSphereRenderer(device, canvas) {
       sf[45] = dipole.alpha0_dim ?? 0;
       sf[46] = dipole.T0 ?? 0;
       sf[47] = dipole.display_mode ?? 0;
+      // dipole_shift: (x₀, y₀, z₀, pad), in R-units.
+      sf[48] = dipole.shift_x ?? 0;
+      sf[49] = dipole.shift_y ?? 0;
+      sf[50] = dipole.shift_z ?? 0;
+      sf[51] = 0;
     } else {
       sf[44] = 0; sf[45] = 0; sf[46] = 0; sf[47] = 0;
+      sf[48] = 0; sf[49] = 0; sf[50] = 0; sf[51] = 0;
     }
 
     device.queue.writeBuffer(paramsBuffer, 0, scratch);

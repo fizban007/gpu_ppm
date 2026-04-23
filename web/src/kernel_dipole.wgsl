@@ -63,6 +63,11 @@ struct Params {
     beaming: u32,
     n_rings: u32,
     _pad0: u32,
+
+    shift_x: f32,
+    shift_y: f32,
+    shift_z: f32,
+    _pad1: u32,
 };
 
 @group(0) @binding(0) var<uniform>                   P: Params;
@@ -216,32 +221,45 @@ fn blackbody_I(E: f32, kT: f32) -> f32 {
 
 // ---------------- Dipole math ----------------
 
-// Body-frame colatitude θ' from lab-frame (θ, φ) and magnetic inclination ι.
-// Magnetic axis placed at (θ=ι, φ=0) so the inclined pole faces the camera
-// at the default observer_phase, rather than sitting on the far side.
-fn cos_theta_prime(theta: f32, phi: f32) -> f32 {
-    return cos(theta) * wg_cos_iota + sin(theta) * cos(phi) * wg_sin_iota;
+// Lab-frame spherical (r_s, θ_s, φ_s) → shifted Cartesian (x, y, z) relative
+// to the magnetic-dipole center at (shift_x, shift_y, shift_z). Tier 2 extends
+// Tier 1 by making every dipole quantity a function of these three lab coords
+// rather than assuming the centered r=R=1 convention.
+fn shifted_cart(r_s: f32, theta_s: f32, phi_s: f32) -> vec3<f32> {
+    let st = sin(theta_s);
+    return vec3<f32>(
+        r_s * st * cos(phi_s) - P.shift_x,
+        r_s * st * sin(phi_s) - P.shift_y,
+        r_s * cos(theta_s)    - P.shift_z,
+    );
 }
 
-// sin²θ' — this is the only quantity α depends on (on the surface r = R).
-fn sin2_theta_prime(theta: f32, phi: f32) -> f32 {
-    let ct = cos_theta_prime(theta, phi);
-    return max(0.0, 1.0 - ct * ct);
+// α(r_s, θ_s, φ_s) = −sin²θ' / r where r is the shifted radial distance and
+// θ' is the body-frame colatitude (magnetic axis at (θ=ι, φ=0)).
+fn alpha_at(r_s: f32, theta_s: f32, phi_s: f32) -> f32 {
+    let cart = shifted_cart(r_s, theta_s, phi_s);
+    let r = max(length(cart), 1e-4);
+    let ct  = cart.z / r;
+    let st  = sqrt(max(0.0, 1.0 - ct * ct));
+    let cp  = cart.x / max(r * st, 1e-4);   // cos(phi_local)
+    let cos_tp = ct * wg_cos_iota + st * cp * wg_sin_iota;
+    let sin2_tp = max(0.0, 1.0 - cos_tp * cos_tp);
+    return -sin2_tp / r;
 }
 
-// Body-frame longitude φ' for the flipped axis convention above. Equivalent
-// to substituting φ → φ+π in the paper's formula (both sin φ and cos φ
-// negate) — getting only one of those flipped would leave cos β with the
-// wrong sign and skew the Λ asymmetry onto the wrong half of the cap.
-fn phi_prime(theta: f32, phi: f32) -> f32 {
-    let num = -sin(theta) * sin(phi);
-    let den = -sin(theta) * cos(phi) * wg_cos_iota + cos(theta) * wg_sin_iota;
+// β = φ' (body-frame longitude). Atan2 of the shifted Cartesian projected
+// onto the body-frame (x', y') plane — derived by substituting φ → φ+π in
+// the paper's formula to match our +x magnetic-axis convention.
+fn beta_at(r_s: f32, theta_s: f32, phi_s: f32) -> f32 {
+    let cart = shifted_cart(r_s, theta_s, phi_s);
+    let r = max(length(cart), 1e-4);
+    let ct = cart.z / r;
+    let st = sqrt(max(0.0, 1.0 - ct * ct));
+    let cp = cart.x / max(r * st, 1e-4);
+    let sp = cart.y / max(r * st, 1e-4);
+    let num = -st * sp;
+    let den = -st * cp * wg_cos_iota + ct * wg_sin_iota;
     return atan2(num, den);
-}
-
-// α in dimensionless μ/R units. On the surface r=R, α_dim = −sin²θ'.
-fn alpha_dim(theta: f32, phi: f32) -> f32 {
-    return -sin2_theta_prime(theta, phi);
 }
 
 // Bessel J₀ / J₁ via power series (accurate to ~1e-5 for |x| ≤ π, plenty
@@ -280,59 +298,71 @@ fn lambda_func(abs_alpha: f32, beta_val: f32, cos_tp_sign: f32) -> f32 {
     return sign * 2.0 * (j0_ * wg_cos_iota - sign * j1_ * cos(beta_val) * wg_sin_iota);
 }
 
-// Goldreich-Julian charge density up to the same Ω-absorption convention:
-//   ρ_GJ ∝ -(3 cos θ' cos θ − cos ι)
-// on the surface of a centered dipole at inclination ι. This lets us compare
-// |j|² to ρ² without having to evaluate Eq. 7 (which needs second derivatives).
-fn rho_gj_dim(theta: f32, phi: f32) -> f32 {
-    let cos_tp = cos_theta_prime(theta, phi);
-    return -(3.0 * cos_tp * cos(theta) - wg_cos_iota);
+// Goldreich-Julian charge density in shifted-dipole coordinates. The centered
+// formula ρ ∝ -(3 cos θ' cos θ − cos ι) picks up a 1/r³ scaling from the
+// non-relativistic dipole field at the shifted surface point.
+fn rho_at(r_s: f32, theta_s: f32, phi_s: f32) -> f32 {
+    let cart = shifted_cart(r_s, theta_s, phi_s);
+    let r = max(length(cart), 1e-4);
+    let ct = cart.z / r;
+    let st = sqrt(max(0.0, 1.0 - ct * ct));
+    let cp = cart.x / max(r * st, 1e-4);
+    let cos_tp = ct * wg_cos_iota + st * cp * wg_sin_iota;
+    return -(3.0 * cos_tp * ct - wg_cos_iota) / (r * r * r);
 }
 
-// Compute 3-current magnitude |j| at (θ, φ) on the surface r = R, in
-// dimensionless μ/R² units. Uses finite-difference derivatives of α, β.
-// Returns 0 outside the open polar cap, or for points where the spacelike
-// condition |j| > |ρ| fails (we skip the return current in this first
-// implementation).
-fn surface_current_mag(theta: f32, phi: f32) -> f32 {
-    let alpha = alpha_dim(theta, phi);
+// Compute 3-current magnitude |j| at lab-frame (r_s, θ_s, φ_s). For shifted
+// dipoles every derivative of α, β w.r.t. lab coords is non-trivial and we
+// do them all via symmetric finite differences. Returns 0 outside the open
+// polar cap or where |j| ≤ |ρ| (spacelike heating only, Tier 1 scope).
+fn surface_current_mag(r_s: f32, theta_s: f32, phi_s: f32) -> f32 {
+    let alpha = alpha_at(r_s, theta_s, phi_s);
     let abs_a = abs(alpha);
     if (abs_a >= wg_alpha0_dim) { return 0.0; }
 
-    let cos_tp = cos_theta_prime(theta, phi);
-    let beta   = phi_prime(theta, phi);
+    // Body-frame cos θ' at the evaluation point, for the Λ hemisphere sign.
+    let cart = shifted_cart(r_s, theta_s, phi_s);
+    let r = max(length(cart), 1e-4);
+    let ctL = cart.z / r;
+    let stL = sqrt(max(0.0, 1.0 - ctL * ctL));
+    let cpL = cart.x / max(r * stL, 1e-4);
+    let cos_tp = ctL * wg_cos_iota + stL * cpL * wg_sin_iota;
 
-    // FD for ∂α/∂θ, ∂α/∂φ, ∂β/∂θ, ∂β/∂φ.  β doesn't depend on r; ∂α/∂r = −α/r.
-    let a_t_p = alpha_dim(theta + FD_EPS, phi);
-    let a_t_m = alpha_dim(theta - FD_EPS, phi);
-    let a_p_p = alpha_dim(theta, phi + FD_EPS);
-    let a_p_m = alpha_dim(theta, phi - FD_EPS);
-    let b_t_p = phi_prime(theta + FD_EPS, phi);
-    let b_t_m = phi_prime(theta - FD_EPS, phi);
-    let b_p_p = phi_prime(theta, phi + FD_EPS);
-    let b_p_m = phi_prime(theta, phi - FD_EPS);
+    let beta = beta_at(r_s, theta_s, phi_s);
 
-    // Unwrap β = φ' jumps between perturbations (atan2 wraps at ±π).
-    let db_dtheta = wrap_pi(b_t_p - b_t_m) / (2.0 * FD_EPS);
-    let db_dphi   = wrap_pi(b_p_p - b_p_m) / (2.0 * FD_EPS);
+    // FD for all six first derivatives of α, β w.r.t. (r_s, θ_s, φ_s).
+    let a_r_p = alpha_at(r_s + FD_EPS, theta_s, phi_s);
+    let a_r_m = alpha_at(r_s - FD_EPS, theta_s, phi_s);
+    let a_t_p = alpha_at(r_s, theta_s + FD_EPS, phi_s);
+    let a_t_m = alpha_at(r_s, theta_s - FD_EPS, phi_s);
+    let a_p_p = alpha_at(r_s, theta_s, phi_s + FD_EPS);
+    let a_p_m = alpha_at(r_s, theta_s, phi_s - FD_EPS);
+    let b_r_p = beta_at (r_s + FD_EPS, theta_s, phi_s);
+    let b_r_m = beta_at (r_s - FD_EPS, theta_s, phi_s);
+    let b_t_p = beta_at (r_s, theta_s + FD_EPS, phi_s);
+    let b_t_m = beta_at (r_s, theta_s - FD_EPS, phi_s);
+    let b_p_p = beta_at (r_s, theta_s, phi_s + FD_EPS);
+    let b_p_m = beta_at (r_s, theta_s, phi_s - FD_EPS);
+
+    let da_dr     = (a_r_p - a_r_m) / (2.0 * FD_EPS);
     let da_dtheta = (a_t_p - a_t_m) / (2.0 * FD_EPS);
     let da_dphi   = (a_p_p - a_p_m) / (2.0 * FD_EPS);
-    let da_dr     = -alpha;   // on surface, ∂_r α = +sin²θ'/R = -α/R; use R = 1 units
+    let db_dr     = wrap_pi(b_r_p - b_r_m) / (2.0 * FD_EPS);
+    let db_dtheta = wrap_pi(b_t_p - b_t_m) / (2.0 * FD_EPS);
+    let db_dphi   = wrap_pi(b_p_p - b_p_m) / (2.0 * FD_EPS);
 
     let lam = lambda_func(abs_a, beta, cos_tp);
-    let sin_t = max(sin(theta), 1e-4);
-    // Eqs. 4–6 with r = 1 (dimensionless) and ∂_r β = 0:
-    let inv_grr = 1.0 / max(wg_uu, 1e-4);   // 1 / √(1 − 2M/r) factor
-    let Jr  = lam * (da_dtheta * db_dphi - da_dphi * db_dtheta) / (inv_grr * sin_t);
-    let Jth = -lam * da_dr * db_dphi / sin_t;
-    let Jph =  lam * da_dr * db_dtheta;
+    let sin_t = max(sin(theta_s), 1e-4);
+    let inv_grr = 1.0 / max(wg_uu, 1e-4);        // 1/√(1−2M/r_s)
+
+    // Eqs. 4–6 with r → r_s in the denominators. No assumption that ∂_r β = 0.
+    let Jr  =  lam * (da_dtheta * db_dphi - da_dphi * db_dtheta) / (inv_grr * r_s * sin_t);
+    let Jth =  lam * (da_dphi * db_dr    - da_dr * db_dphi)     / (r_s * sin_t);
+    let Jph =  lam * (da_dr * db_dtheta  - da_dtheta * db_dr)   /  r_s;
 
     let j_sq = Jr * Jr + Jth * Jth + Jph * Jph;
     let j_mag = sqrt(max(j_sq, 0.0));
-    // Tier 1 heating condition (Eq. 14 of Huang & Chen 2025 without the
-    // return-current branch): emission only where the 4-current is spacelike,
-    // i.e. |j| > |ρ|. Timelike regions (|ρ| > |j|) sit dark on the light curve.
-    let rho_mag = abs(rho_gj_dim(theta, phi));
+    let rho_mag = abs(rho_at(r_s, theta_s, phi_s));
     if (j_mag <= rho_mag) { return 0.0; }
     return j_mag;
 }
@@ -346,9 +376,10 @@ fn wrap_pi(x: f32) -> f32 {
     return y;
 }
 
-// Per-patch kT in keV for a lab-frame point (θ, φ) on the open cap.
-fn patch_temperature(theta: f32, phi: f32) -> f32 {
-    let jmag = surface_current_mag(theta, phi);
+// Per-patch kT in keV for a lab-frame point (r_s, θ_s, φ_s) on the open cap.
+// r_s = 1 in our R-unit convention on the stellar surface.
+fn patch_temperature(r_s: f32, theta_s: f32, phi_s: f32) -> f32 {
+    let jmag = surface_current_mag(r_s, theta_s, phi_s);
     if (jmag == 0.0) { return 0.0; }
     return P.T0 * pow(jmag, 0.25);
 }
@@ -438,9 +469,10 @@ fn main(
     let tid: u32    = local_id.x;
 
     // ---- Fast-path: skip rings that can't touch either polar cap ----
-    // Both caps are antipodal (centered at θ=ι and θ=π−ι, with the same
-    // angular radius θ_cap set by sin²θ_cap = α₀R/μ). We test the ring
-    // against each cap separately and bail only if both are missed.
+    // The centered-dipole caps sit at (θ=ι, any φ) and (θ=π−ι, any φ); both
+    // have angular radius θ_cap with sin²θ_cap = α₀R/μ. When the dipole is
+    // shifted the caps deform asymmetrically, so we only apply the fast-path
+    // when the shift is negligible.
     let ring_ct_test = healpix_cos_theta_ring(wg_idx + 1u);
     let ring_st_test = sqrt(max(0.0, 1.0 - ring_ct_test * ring_ct_test));
     let ci_test = cos(P.mag_incl);
@@ -448,10 +480,13 @@ fn main(
     let alpha0_test = SQRT_3_HALVES
         * (TWO_PI * P.nu * P.Re / C_KM_S)
         * (1.0 + si_test * si_test * 0.2);
-    let cos_cap_test = sqrt(max(0.0, 1.0 - alpha0_test));  // cos θ_cap
-    let cos_N = ring_st_test * si_test + ring_ct_test * ci_test;   // cap at (θ=ι)
-    let cos_S = ring_st_test * si_test - ring_ct_test * ci_test;   // cap at (θ=π-ι, φ=π) — ring-level angular distance
-    if (cos_N <= cos_cap_test && cos_S <= cos_cap_test) {
+    let cos_cap_test = sqrt(max(0.0, 1.0 - alpha0_test));
+    let cos_N = ring_st_test * si_test + ring_ct_test * ci_test;
+    let cos_S = ring_st_test * si_test - ring_ct_test * ci_test;
+    let shift_mag = abs(P.shift_x) + abs(P.shift_y) + abs(P.shift_z);
+    if (shift_mag < 1e-4
+        && cos_N <= cos_cap_test
+        && cos_S <= cos_cap_test) {
         if (tid < N_OUTPUT_PHASE) {
             per_ring_flux[wg_idx * N_OUTPUT_PHASE + tid] = 0.0;
         }
@@ -500,6 +535,8 @@ fn main(
     workgroupBarrier();
 
     // ---- Fill active_phi (dipole filter: |α| < α₀, store per-patch kT) ----
+    // r_s = 1 on the surface in our R-unit convention; α and friends pick up
+    // the shift through alpha_at/patch_temperature.
     {
         let healpix_i = wg_idx + 1u;
         let jmax = healpix_j_max(healpix_i);
@@ -508,9 +545,9 @@ fn main(
             let hj = k * BLOCK_DIM + tid + 1u;
             if (hj <= jmax) {
                 let phi = healpix_phi(healpix_i, hj);
-                let abs_a = -alpha_dim(theta_ring, phi);   // |α_dim| = sin²θ'
+                let abs_a = abs(alpha_at(1.0, theta_ring, phi));
                 if (abs_a < wg_alpha0_dim) {
-                    let kT = patch_temperature(theta_ring, phi);
+                    let kT = patch_temperature(1.0, theta_ring, phi);
                     if (kT > 0.0) {
                         let idx = atomicAdd(&wg_N_active_phi, 1u);
                         wg_active_phi[idx] = phi;

@@ -70,7 +70,7 @@ export const DIPOLE_PRESETS = [
     inc_deg: 65,
     beaming: 0,
     emission_mode: "dipole",
-    dipole: { mag_incl_deg: 45, T0: 0.40 },
+    dipole: { mag_incl_deg: 45, T0: 0.40, shift_x: 0, shift_y: 0, shift_z: 0 },
   },
   {
     name: "dipole (aligned, ι=10°)",
@@ -78,7 +78,15 @@ export const DIPOLE_PRESETS = [
     inc_deg: 65,
     beaming: 0,
     emission_mode: "dipole",
-    dipole: { mag_incl_deg: 10, T0: 0.40 },
+    dipole: { mag_incl_deg: 10, T0: 0.40, shift_x: 0, shift_y: 0, shift_z: 0 },
+  },
+  {
+    name: "dipole (shifted, x₀=0.3R)",
+    nu: 400,
+    inc_deg: 65,
+    beaming: 0,
+    emission_mode: "dipole",
+    dipole: { mag_incl_deg: 45, T0: 0.40, shift_x: 0.3, shift_y: 0, shift_z: 0 },
   },
 ];
 

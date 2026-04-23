@@ -21,6 +21,7 @@ struct RenderParams {
     spots:     array<vec4<f32>, 4>,    // (θ, φ, cos_ar, mode) per slot
     spots_kt:  vec4<f32>,              // kT per slot (keV); SUBTRACT slots' kT is unused
     dipole:    vec4<f32>,              // x=mag_incl  y=alpha0_dim  z=T0  w=display_mode (0|1|2 as f32)
+    dipole_shift: vec4<f32>,           // xyz = (x₀, y₀, z₀) shift in R-units
 };
 
 @group(0) @binding(0) var<uniform> R: RenderParams;
@@ -79,21 +80,51 @@ fn spot_kT(index: u32) -> f32 {
 // kT ≈ T₀ · |j|^(1/4) where |j| comes from Eqs. 4–6 via FD derivatives.
 
 // Magnetic axis at (θ=ι, φ=0) — the inclined pole is on the camera side at
-// default observer_phase. Same convention as kernel_dipole.wgsl.
-fn dipole_cos_tp(theta: f32, phi: f32) -> f32 {
-    let iota = R.dipole.x;
-    return cos(theta) * cos(iota) + sin(theta) * cos(phi) * sin(iota);
+// default observer_phase. Same convention as kernel_dipole.wgsl. All dipole
+// helpers here take lab-frame (r_s, θ_s, φ_s) and route through the shifted
+// Cartesian → shifted spherical → body frame chain, exactly like the kernel.
+
+fn dipole_shifted_cart(r_s: f32, theta: f32, phi: f32) -> vec3<f32> {
+    let st = sin(theta);
+    return vec3<f32>(
+        r_s * st * cos(phi) - R.dipole_shift.x,
+        r_s * st * sin(phi) - R.dipole_shift.y,
+        r_s * cos(theta)    - R.dipole_shift.z,
+    );
 }
 
-fn dipole_sin2_tp(theta: f32, phi: f32) -> f32 {
-    let c = dipole_cos_tp(theta, phi);
-    return max(0.0, 1.0 - c * c);
+fn dipole_cos_tp(r_s: f32, theta: f32, phi: f32) -> f32 {
+    let iota = R.dipole.x;
+    let cart = dipole_shifted_cart(r_s, theta, phi);
+    let r = max(length(cart), 1e-4);
+    let ct = cart.z / r;
+    let st = sqrt(max(0.0, 1.0 - ct * ct));
+    let cp = cart.x / max(r * st, 1e-4);
+    return ct * cos(iota) + st * cp * sin(iota);
 }
 
-fn dipole_phi_prime(theta: f32, phi: f32) -> f32 {
+fn dipole_alpha(r_s: f32, theta: f32, phi: f32) -> f32 {
     let iota = R.dipole.x;
-    let num = -sin(theta) * sin(phi);
-    let den = -sin(theta) * cos(phi) * cos(iota) + cos(theta) * sin(iota);
+    let cart = dipole_shifted_cart(r_s, theta, phi);
+    let r = max(length(cart), 1e-4);
+    let ct = cart.z / r;
+    let st = sqrt(max(0.0, 1.0 - ct * ct));
+    let cp = cart.x / max(r * st, 1e-4);
+    let cos_tp = ct * cos(iota) + st * cp * sin(iota);
+    let sin2_tp = max(0.0, 1.0 - cos_tp * cos_tp);
+    return -sin2_tp / r;
+}
+
+fn dipole_beta(r_s: f32, theta: f32, phi: f32) -> f32 {
+    let iota = R.dipole.x;
+    let cart = dipole_shifted_cart(r_s, theta, phi);
+    let r = max(length(cart), 1e-4);
+    let ct = cart.z / r;
+    let st = sqrt(max(0.0, 1.0 - ct * ct));
+    let cp = cart.x / max(r * st, 1e-4);
+    let sp = cart.y / max(r * st, 1e-4);
+    let num = -st * sp;
+    let den = -st * cp * cos(iota) + ct * sin(iota);
     return atan2(num, den);
 }
 
@@ -126,43 +157,51 @@ fn wrap_pi(x: f32) -> f32 {
     return y;
 }
 
-// Returns dimensionless 3-current magnitude |j| at surface point (θ, φ).
-// Ω is absorbed into T₀ for visualization — we skip it here and let the
-// colormap scale handle magnitudes.
-fn dipole_j_mag(theta: f32, phi: f32) -> f32 {
+// 3-current magnitude |j| at lab-frame (r_s, θ, φ). r_s = 1 on the stellar
+// surface in R-units. FD derivatives on all three lab coordinates so the
+// shifted-dipole case (∂_r β ≠ 0, ∂_r α ≠ −α/r_s) is handled correctly.
+fn dipole_j_mag(r_s: f32, theta: f32, phi: f32) -> f32 {
     let alpha0 = R.dipole.y;
-    let sin2_tp = dipole_sin2_tp(theta, phi);
-    if (sin2_tp >= alpha0) { return 0.0; }
-    let cos_tp = dipole_cos_tp(theta, phi);
-    let abs_a  = sin2_tp;
+    let alpha  = dipole_alpha(r_s, theta, phi);
+    let abs_a  = abs(alpha);
+    if (abs_a >= alpha0) { return 0.0; }
 
-    let eps = 1e-3;
-    let a_tp = dipole_sin2_tp(theta + eps, phi);
-    let a_tm = dipole_sin2_tp(theta - eps, phi);
-    let a_pp = dipole_sin2_tp(theta, phi + eps);
-    let a_pm = dipole_sin2_tp(theta, phi - eps);
-    // α = -sin²θ', so ∂α/∂x = -∂sin²θ'/∂x
-    let da_dtheta = -(a_tp - a_tm) / (2.0 * eps);
-    let da_dphi   = -(a_pp - a_pm) / (2.0 * eps);
-    let db_dtheta = wrap_pi(dipole_phi_prime(theta + eps, phi) - dipole_phi_prime(theta - eps, phi)) / (2.0 * eps);
-    let db_dphi   = wrap_pi(dipole_phi_prime(theta, phi + eps) - dipole_phi_prime(theta, phi - eps)) / (2.0 * eps);
-    let da_dr     = abs_a;   // = -α at r=1
+    let cos_tp = dipole_cos_tp(r_s, theta, phi);
+    let beta   = dipole_beta  (r_s, theta, phi);
 
-    // Λ(α, β), with the sign flip between hemispheres (cos θ'>0 is north).
+    let eps: f32 = 1e-3;
+    let a_r_p = dipole_alpha(r_s + eps, theta, phi);
+    let a_r_m = dipole_alpha(r_s - eps, theta, phi);
+    let a_t_p = dipole_alpha(r_s, theta + eps, phi);
+    let a_t_m = dipole_alpha(r_s, theta - eps, phi);
+    let a_p_p = dipole_alpha(r_s, theta, phi + eps);
+    let a_p_m = dipole_alpha(r_s, theta, phi - eps);
+    let b_r_p = dipole_beta (r_s + eps, theta, phi);
+    let b_r_m = dipole_beta (r_s - eps, theta, phi);
+    let b_t_p = dipole_beta (r_s, theta + eps, phi);
+    let b_t_m = dipole_beta (r_s, theta - eps, phi);
+    let b_p_p = dipole_beta (r_s, theta, phi + eps);
+    let b_p_m = dipole_beta (r_s, theta, phi - eps);
+
+    let da_dr     = (a_r_p - a_r_m) / (2.0 * eps);
+    let da_dtheta = (a_t_p - a_t_m) / (2.0 * eps);
+    let da_dphi   = (a_p_p - a_p_m) / (2.0 * eps);
+    let db_dr     = wrap_pi(b_r_p - b_r_m) / (2.0 * eps);
+    let db_dtheta = wrap_pi(b_t_p - b_t_m) / (2.0 * eps);
+    let db_dphi   = wrap_pi(b_p_p - b_p_m) / (2.0 * eps);
+
     let ratio = clamp(abs_a / alpha0, 0.0, 1.0);
     let arg   = 2.0 * asin(sqrt(ratio));
     let j0_   = bessel_J0(arg);
     let j1_   = bessel_J1(arg);
     let iota  = R.dipole.x;
-    let beta  = dipole_phi_prime(theta, phi);
     let hem_sign = select(1.0, -1.0, cos_tp > 0.0);
     let lam   = hem_sign * 2.0 * (j0_ * cos(iota) - hem_sign * j1_ * cos(beta) * sin(iota));
 
-    // Eqs. 4-6 with r=1 and ∂_r β = 0.
     let sin_t = max(sin(theta), 1e-4);
-    let Jr  = lam * (da_dtheta * db_dphi - da_dphi * db_dtheta) / sin_t;
-    let Jth = -lam * da_dr * db_dphi / sin_t;
-    let Jph =  lam * da_dr * db_dtheta;
+    let Jr  = lam * (da_dtheta * db_dphi - da_dphi * db_dtheta) / (r_s * sin_t);
+    let Jth = lam * (da_dphi * db_dr    - da_dr * db_dphi)     / (r_s * sin_t);
+    let Jph = lam * (da_dr * db_dtheta  - da_dtheta * db_dr)   /  r_s;
     return sqrt(max(Jr * Jr + Jth * Jth + Jph * Jph, 0.0));
 }
 
@@ -177,11 +216,18 @@ fn diverging_color(t: f32) -> vec3<f32> {
     }
 }
 
-// Same GJ charge-density approximation used in kernel_dipole.wgsl.
-fn dipole_rho_gj(theta: f32, phi: f32) -> f32 {
+// Same GJ charge-density approximation used in kernel_dipole.wgsl. Picks up
+// a 1/r³ factor from the non-relativistic dipole field at the shifted
+// distance r = |lab_cart − shift_vec|.
+fn dipole_rho_gj(r_s: f32, theta: f32, phi: f32) -> f32 {
     let iota = R.dipole.x;
-    let cos_tp = dipole_cos_tp(theta, phi);
-    return -(3.0 * cos_tp * cos(theta) - cos(iota));
+    let cart = dipole_shifted_cart(r_s, theta, phi);
+    let r = max(length(cart), 1e-4);
+    let ct = cart.z / r;
+    let st = sqrt(max(0.0, 1.0 - ct * ct));
+    let cp = cart.x / max(r * st, 1e-4);
+    let cos_tp = ct * cos(iota) + st * cp * sin(iota);
+    return -(3.0 * cos_tp * ct - cos(iota)) / (r * r * r);
 }
 
 @fragment
@@ -243,15 +289,12 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
         let phi_co = phi - TWO_PI * observer_phase;
 
         let theta_here = acos(clamp(cos_theta, -1.0, 1.0));
-        let sin2_tp = dipole_sin2_tp(theta_here, phi_co);
-        if (sin2_tp < R.dipole.y) {
-            let jmag = dipole_j_mag(theta_here, phi_co);        // |j| inside cap (no ρ gate)
-            let rho  = dipole_rho_gj(theta_here, phi_co);
+        let r_here: f32 = 1.0;         // stellar surface in R-units
+        let abs_alpha = abs(dipole_alpha(r_here, theta_here, phi_co));
+        if (abs_alpha < R.dipole.y) {
+            let jmag = dipole_j_mag  (r_here, theta_here, phi_co);
+            let rho  = dipole_rho_gj (r_here, theta_here, phi_co);
             if (display_mode == 1u) {
-                // T-map: heating only where |j| > |ρ|. Color picks up the
-                // kT-dependent hot gradient; alpha fades smoothly with the
-                // spacelike excess |j| − |ρ|, so the gate boundary doesn't
-                // read as a hard edge.
                 let excess = jmag - abs(rho);
                 if (excess > 0.0) {
                     let kT = T0 * pow(jmag, 0.25);
@@ -260,12 +303,6 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
                     base = mix(base, hot_color_for_kT(kT), alpha);
                 }
             } else {
-                // Signed J² = |j|² − ρ². Instead of blending toward white at
-                // the zero crossing (which reads as grey over the cold base),
-                // we always paint pure red (spacelike) or pure blue (timelike)
-                // and let transparency alone encode the magnitude — that way
-                // the transition sweeps smoothly from base color through tinted
-                // base to saturated red/blue.
                 let j_sq_signed = jmag * jmag - rho * rho;
                 let scale: f32 = 5.0;
                 let t = j_sq_signed / scale;

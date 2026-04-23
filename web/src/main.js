@@ -267,7 +267,10 @@ async function main() {
   // ---------- state ----------
   const observer = { nu: 600, inc_deg: 80, beaming: 0 };
   const spots = [];
-  const dipole = { mag_incl_deg: 45, T0: 0.40, display_mode: 1 };   // 1 = T-map, 2 = |j|
+  const dipole = {
+    mag_incl_deg: 45, T0: 0.40, display_mode: 1,   // 1 = T-map, 2 = |j|
+    shift_x: 0, shift_y: 0, shift_z: 0,            // shift in R-units
+  };
   let emissionMode = "spots";
   let presetName = DEFAULT_PRESET;
   let observerPhase = 0;
@@ -285,6 +288,9 @@ async function main() {
     if (emissionMode === "dipole") {
       dipole.mag_incl_deg = p.dipole.mag_incl_deg;
       dipole.T0 = p.dipole.T0;
+      dipole.shift_x = p.dipole.shift_x ?? 0;
+      dipole.shift_y = p.dipole.shift_y ?? 0;
+      dipole.shift_z = p.dipole.shift_z ?? 0;
     } else {
       spots.length = 0;
       for (const s of p.spots) spots.push({ ...s });
@@ -348,7 +354,20 @@ async function main() {
     options: [{ value: 1, text: "temperature" }, { value: 2, text: "|j| (current)" }],
     value: dipole.display_mode,
   });
-  dipoleBody.append(iotaSlider.row, T0Slider.row, displaySelect.row);
+  const shiftXSlider = makeSlider({
+    label: "x₀", min: -0.5, max: 0.5, step: 0.01,
+    value: dipole.shift_x, format: (v) => `${v.toFixed(2)} R`,
+  });
+  const shiftYSlider = makeSlider({
+    label: "y₀", min: -0.5, max: 0.5, step: 0.01,
+    value: dipole.shift_y, format: (v) => `${v.toFixed(2)} R`,
+  });
+  const shiftZSlider = makeSlider({
+    label: "z₀", min: -0.5, max: 0.5, step: 0.01,
+    value: dipole.shift_z, format: (v) => `${v.toFixed(2)} R`,
+  });
+  dipoleBody.append(iotaSlider.row, T0Slider.row, displaySelect.row,
+                    shiftXSlider.row, shiftYSlider.row, shiftZSlider.row);
 
   paramPanel.append(spotsHeader, spotsBody, addBtn, dipoleHeader, dipoleBody);
 
@@ -405,6 +424,9 @@ async function main() {
               obs_incl: observer.inc_deg * DEG,
               T0: dipole.T0,
               beaming: observer.beaming,
+              shift_x: dipole.shift_x,
+              shift_y: dipole.shift_y,
+              shift_z: dipole.shift_z,
             },
             OS1_DEFAULTS,
           );
@@ -460,6 +482,9 @@ async function main() {
         alpha0_dim: alpha0Dim(observer.nu, OS1_DEFAULTS.Re, dipole.mag_incl_deg * DEG),
         T0: dipole.T0,
         display_mode: dipole.display_mode,
+        shift_x: dipole.shift_x,
+        shift_y: dipole.shift_y,
+        shift_z: dipole.shift_z,
       };
     }
     renderer.draw(p);
@@ -490,6 +515,9 @@ async function main() {
 
   iotaSlider.onInput((v)  => { dipole.mag_incl_deg = v; requestRecompute(); });
   T0Slider.onInput((v)    => { dipole.T0 = v;           requestRecompute(); });
+  shiftXSlider.onInput((v) => { dipole.shift_x = v;     requestRecompute(); });
+  shiftYSlider.onInput((v) => { dipole.shift_y = v;     requestRecompute(); });
+  shiftZSlider.onInput((v) => { dipole.shift_z = v;     requestRecompute(); });
   displaySelect.onChange((v) => {
     dipole.display_mode = v;
     redrawSphere();     // render-only change, no recompute
@@ -509,6 +537,9 @@ async function main() {
     beamSelect.setValue(observer.beaming);
     iotaSlider.setValue(dipole.mag_incl_deg);
     T0Slider.setValue(dipole.T0);
+    shiftXSlider.setValue(dipole.shift_x);
+    shiftYSlider.setValue(dipole.shift_y);
+    shiftZSlider.setValue(dipole.shift_z);
     modeSelect.setValue(emissionMode === "dipole" ? 1 : 0);
     applyModeVisibility();
     rebuildSpots();

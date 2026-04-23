@@ -6,7 +6,7 @@
 const N_SIDE = 256;
 const N_OUTPUT_PHASE = 128;
 const N_RINGS_FULL = 4 * N_SIDE - 1;
-const PARAMS_SIZE = 80;    // matches Params layout in kernel_dipole.wgsl
+const PARAMS_SIZE = 96;    // matches Params layout in kernel_dipole.wgsl
 
 function ibbOverD2(D_kpc) {
   const H_KEV_S = 4.135668e-18;
@@ -118,6 +118,10 @@ export async function createDipoleEngine(device, lensing) {
     u[16] = h.cos_alpha.n;
     u[17] = dipole.beaming ?? 0;
     u[18] = N_RINGS_FULL;
+    //  80 shift_x  84 shift_y  88 shift_z  92 pad
+    f[20] = dipole.shift_x ?? 0;
+    f[21] = dipole.shift_y ?? 0;
+    f[22] = dipole.shift_z ?? 0;
 
     device.queue.writeBuffer(paramsBuffer, 0, ab);
   }
